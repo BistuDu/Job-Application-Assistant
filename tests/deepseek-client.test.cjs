@@ -3,129 +3,129 @@ const { test } = require('node:test');
 const client = require('../deepseek-client.js');
 const settings = { apiKey: 'test-key-not-a-real-credential', model: client.DEFAULT_MODEL };
 const field = { fieldId: 'f-1', label: '电话', controlType: 'text', options: [] };
-const profile = { phone: '13800138000', family: [{ relation: '母亲', name: '李五' }], supplementText: '母亲的电话是13900000002，驾驶证类别是C1。' };
-const sources = client.buildSources(profile);
-const assignment = { fieldId: field.fieldId, sourcePath: 'phone', value: null, evidenceQuote: null, optionId: null, transform: 'original', fillNone: false };
-const extracted = { ...assignment, sourcePath: null, value: '13900000002', evidenceQuote: profile.supplementText };
-const response = (data, finishReason = 'stop') => ({ ok: true, json: async () => ({ choices: [{ finish_reason: finishReason, message: { content: typeof data === 'string' ? data : JSON.stringify(data) } }] }) });
-const validate = (assignments, fields = [field], src = sources, options = {}) => client.validateAssignments({ assignments }, fields, src, options);
+const select = { fieldId: 'f-2', label: '学历', controlType: 'select', options: [{ optionId: 'option-0', text: '本科', value: '1' }, { optionId: 'option-1', text: '硕士', value: '2' }] };
+const text = '我叫张三，手机号是13900000002。母亲的电话是13800138000，驾驶证类别是C1。没有获得过竞赛奖项。';
+const quote = '手机号是13900000002。';
+const assignment = { fieldId: 'f-1', value: '13900000002', evidenceQuote: quote, optionId: null, transform: 'original', fillNone: false, note: null };
+const raw = (content, finishReason = 'stop') => ({ ok: true, json: async () => ({ choices: [{ finish_reason: finishReason, message: { content } }] }) });
+const response = (data, finishReason = 'stop') => raw(JSON.stringify(data), finishReason);
+const validate = (assignments, fields = [field], source = text, options = {}) => client.validateAssignments({ assignments }, fields, source, options);
+const request = (extra = {}) => client.requestAssignments({ fields: [field], text, settings, ...extra });
 
-test('JSON 来源与自由文本分别提供，未知自定义 JSON 字段仍可用于模型', () => {
-  assert.ok(sources.sourcePaths.includes('family.0.name'));
-  assert.equal(sources.supplementText, profile.supplementText);
-  assert.equal(sources.sourcePaths.includes('supplementText'), false);
-  assert.deepEqual(client.buildSources({ arbitraryField: '真实资料' }).sourcePaths, ['arbitraryField']);
+test('资料只接受文本：非文本和超长都会被拒绝', () => {
+  assert.equal(client.prepareText('  我叫张三  '), '我叫张三');
+  assert.equal(client.hasData('   '), false);
+  assert.equal(client.hasData('我叫张三'), true);
+  assert.equal(client.hasData({ name: '张三' }), false);
+  assert.throws(() => client.prepareText({ name: '张三' }), /文本/);
+  assert.throws(() => client.prepareText('a'.repeat(client.MAX_TEXT_LENGTH + 1)), /30000/);
 });
 
-test('过滤画像中的密钥和危险对象属性', () => {
-  const p = JSON.parse('{"name":"张三","apiKey":"private-key","family":[{"name":"李五","constructor":"bad","password":"private"}],"__proto__":"bad"}');
-  const result = client.buildSources(p);
-  assert.equal(JSON.stringify(result).includes('private'), false);
-  assert.deepEqual(result.sourcePaths, ['name', 'family', 'family.0.name']);
+test('内容必须能在资料原文中逐字核验', () => {
+  assert.equal(validate([assignment]).assignments.length, 1);
+  assert.equal(validate([{ ...assignment, value: '13700000000' }]).rejected[0].code, 'evidence_mismatch');
+  assert.equal(validate([{ ...assignment, evidenceQuote: '手机号是13900000002，' }]).rejected[0].code, 'evidence_mismatch');
+  assert.equal(validate([{ ...assignment, evidenceQuote: null }]).rejected[0].code, 'evidence_mismatch');
 });
 
-test('旧额外资料保留；保存新文本后不重复使用旧内容，清空不复活旧值', () => {
-  const p = { extraInfo: [{ label: '驾驶证', value: 'C1' }] };
-  assert.ok(client.buildSources(p).sourcePaths.includes('extraInfo.0.value'));
-  assert.equal(client.buildSources(p).sourcePaths.includes('extraInfo.0.label'), false);
-  for (const supplementText of ['', '驾驶证变更为C2']) {
-    const result = client.buildSources({ ...p, supplementText });
-    assert.equal(result.sourcePaths.includes('extraInfo.0.value'), false);
-    assert.equal(result.supplementText, supplementText);
-  }
+test('不合法的条目逐条拒绝，不影响同批其他字段', () => {
+  const result = validate([
+    { ...assignment, fieldId: 'missing' },
+    { ...assignment, optionId: 'option-9' },
+    assignment,
+    assignment,
+  ], [field, select]);
+  assert.equal(result.assignments.length, 1);
+  assert.deepEqual(result.rejected.map(item => item.code), ['model_error', 'bad_option', 'model_error']);
 });
 
-test('补充文本超长或格式不正确时拒绝', () => {
-  assert.throws(() => client.buildSources({ supplementText: 'a'.repeat(30001) }), /30000/);
-  assert.throws(() => client.buildSources({ supplementText: {} }), /30000/);
+test('下拉与单选只能选择字段真实提供的选项', () => {
+  const source = '本科毕业于某某大学。';
+  const item = { fieldId: 'f-2', value: '本科', evidenceQuote: '本科毕业于某某大学。', optionId: 'option-0', transform: 'original', fillNone: false };
+  assert.equal(validate([item], [select], source).assignments.length, 1);
+  assert.equal(validate([{ ...item, optionId: null }], [select], source).rejected[0].code, 'no_option');
+  assert.equal(validate([{ ...item, optionId: 'option-7' }], [select], source).rejected[0].code, 'bad_option');
+  assert.equal(validate([{ ...item, fieldId: 'f-1', optionId: 'option-0' }], [field, select], source).rejected[0].code, 'bad_option');
 });
 
-test('可从实际原文摘录电话、证书和日期，保留证据', () => {
-  assert.deepEqual(validate([extracted]), [extracted]);
-  const p = client.buildSources({ supplementText: '实习日期为2025.06-2025.09。' });
-  const item = { ...extracted, value: '2025.06-2025.09', evidenceQuote: p.supplementText, transform: 'startDate' };
-  assert.deepEqual(validate([item], [field], p), [item]);
+test('填「无」需要开关、明确的空缺说法和原文依据', () => {
+  const none = { fieldId: 'f-1', value: '无', evidenceQuote: '没有获得过竞赛奖项。', optionId: null, transform: 'original', fillNone: true };
+  assert.equal(validate([none], [field], text, { fillNoneWhenEmpty: true }).assignments.length, 1);
+  assert.equal(validate([none], [field], text).rejected[0].code, 'bad_fillnone');
+  assert.equal(validate([{ ...none, value: '张三' }], [field], text, { fillNoneWhenEmpty: true }).rejected[0].code, 'bad_fillnone');
+  assert.equal(validate([{ ...none, evidenceQuote: '我叫张三，手机号是13900000002。' }], [field], text, { fillNoneWhenEmpty: true }).rejected[0].code, 'bad_fillnone');
+  assert.equal(validate([{ ...none, evidenceQuote: '资料里没有这句话' }], [field], text, { fillNoneWhenEmpty: true }).rejected[0].code, 'bad_fillnone');
 });
 
-test('拒绝凭空捏造的值、伪造的证据以及只有证据没有内容的方案', () => {
-  for (const item of [
-    { ...extracted, value: '13900000009' }, { ...extracted, evidenceQuote: '父亲的电话是13900000002。' },
-    { ...extracted, evidenceQuote: null }, { ...extracted, value: null }, { ...extracted, value: 123 },
-  ]) assert.throws(() => validate([item]));
+test('日期转换只用于真实日期文本', () => {
+  const source = '实习时间2025.06-2025.09。';
+  const item = { fieldId: 'f-1', value: '2025.06-2025.09', evidenceQuote: '实习时间2025.06-2025.09。', optionId: null, transform: 'startDate' };
+  assert.equal(validate([item], [field], source).assignments[0].transform, 'startDate');
+  assert.equal(validate([{ ...item, transform: 'original' }], [field], source).assignments[0].value, '2025.06-2025.09');
+  assert.equal(validate([{ ...item, transform: 'unknown' }], [field], source).rejected[0].code, 'bad_transform');
+  assert.equal(validate([{ ...assignment, transform: 'year' }]).rejected[0].code, 'bad_transform');
 });
 
-test('不能同时用 JSON 来源和模型生成值', () => {
-  assert.throws(() => validate([{ ...extracted, sourcePath: 'phone' }]), /同时/);
+test('无法确定的字段返回空值并说明缺什么资料', () => {
+  const result = validate([{ fieldId: 'f-1', value: null, evidenceQuote: null, optionId: null, transform: 'original', fillNone: false, note: '缺少紧急联系人电话' }]);
+  assert.equal(result.assignments.length, 0);
+  assert.equal(result.rejected[0].code, 'no_value');
+  assert.equal(result.rejected[0].note, '缺少紧急联系人电话');
+  assert.equal(result.rejected[0].label, '电话');
 });
 
-test('未知来源、未知字段和重复字段被拒绝', () => {
-  for (const items of [[{ ...assignment, sourcePath: '__proto__.name' }], [{ ...assignment, sourcePath: 'missing' }], [{ ...assignment, fieldId: 'missing' }], [assignment, assignment]]) assert.throws(() => validate(items));
+test('整体结构不可用时抛出的错误标记为可修正', () => {
+  assert.throws(() => validate('不是对象'), error => error.fatal === false && /格式/.test(error.message));
 });
 
-test('模型只能选择页面真实选项，不能缺省选项或凭空选择', () => {
-  const select = { ...field, controlType: 'select', options: [{ optionId: 'option-0', text: '可选' }] };
-  assert.throws(() => validate([assignment], [select]));
-  assert.throws(() => validate([{ ...assignment, optionId: 'option-99' }], [select]));
-  assert.throws(() => validate([{ ...assignment, optionId: 'option-0' }]));
-  assert.throws(() => validate([{ ...assignment, sourcePath: null, optionId: 'option-0' }], [select]));
-  assert.equal(validate([{ ...extracted, optionId: 'option-0' }], [select])[0].value, extracted.value);
-});
-
-test('填无需要用户许可和已有空 JSON 来源，不把文字遗漏当没有', () => {
-  const src = client.buildSources({ projects: [], name: '张三' });
-  const none = { ...assignment, sourcePath: 'projects', fillNone: true };
-  assert.throws(() => validate([none], [field], src));
-  assert.equal(validate([none], [field], src, { fillNoneWhenEmpty: true })[0].fillNone, true);
-  assert.throws(() => validate([{ ...none, sourcePath: null }], [field], src, { fillNoneWhenEmpty: true }));
-  assert.throws(() => validate([{ ...none, sourcePath: 'name' }], [field], src, { fillNoneWhenEmpty: true }));
-});
-
-test('电话等长数字不能用日期转换；省略字段明确跳过且不执行额外代码', () => {
-  assert.throws(() => validate([{ ...assignment, transform: 'year' }]), /非日期/);
-  assert.deepEqual(validate([{ ...assignment, selector: '#fake', script: 'bad' }]), [assignment]);
-  assert.equal(validate([])[0].sourcePath, null);
-  assert.equal(validate([])[0].value, null);
-});
-
-test('请求包含 JSON、补充文本、已有页面上下文，Key只放认证头', async () => {
-  let prompt, body;
-  const result = await client.requestAssignments({ fields: [{ ...field, existingContext: [{ label: '关系', value: '母亲' }] }], sources, settings, fetchImpl: async (url, options) => {
-    assert.equal(url, 'https://api.deepseek.com/chat/completions');
-    assert.equal(options.headers.Authorization, `Bearer ${settings.apiKey}`);
-    assert.equal(options.body.includes(settings.apiKey), false);
-    assert.equal(options.redirect, 'error');
-    body = JSON.parse(options.body); prompt = JSON.parse(body.messages[1].content);
-    return response({ assignments: [extracted] });
-  } });
-  assert.deepEqual(result, [extracted]);
-  assert.equal(prompt.profile.phone, profile.phone);
-  assert.equal(prompt.supplementText, profile.supplementText);
-  assert.equal(prompt.fields[0].existingContext[0].value, '母亲');
+test('请求只发送资料文本与字段，Key 只放在认证头', async () => {
+  let captured;
+  const result = await request({ fetchImpl: async (url, init) => { assert.equal(url, 'https://api.deepseek.com/chat/completions'); captured = init; return response({ assignments: [assignment] }); } });
+  const body = JSON.parse(captured.body);
+  const payload = JSON.parse(body.messages[1].content);
+  assert.equal(payload.text, text);
+  assert.equal(payload.fields[0].label, '电话');
+  assert.equal(payload.sourcePaths, undefined);
+  assert.equal(payload.profile, undefined);
+  assert.equal(captured.body.includes('test-key-not-a-real-credential'), false);
+  assert.equal(captured.headers.Authorization, 'Bearer test-key-not-a-real-credential');
+  assert.equal(captured.redirect, 'error');
   assert.equal(body.response_format.type, 'json_object');
+  assert.equal(body.temperature, 0);
   assert.equal(body.thinking.type, 'disabled');
+  assert.match(body.messages[0].content, /逐字复制/);
+  assert.equal(result.assignments.length, 1);
 });
 
-test('Key缺失时不请求；鉴权失败不显示服务端可能包含密钥的正文', async () => {
+test('修正轮把失败原因、字段约束和真实选项一并交给模型', async () => {
+  let body, system;
+  const feedback = [{ fieldId: 'f-2', label: '学历', code: 'bad_option', reason: '模型选择了不存在的表单选项', previousValue: '硕士', constraints: { controlType: 'select' }, options: select.options }];
+  await client.requestAssignments({ fields: [select], text, settings, fillNoneWhenEmpty: true, feedback, fetchImpl: async (_url, init) => { const outer = JSON.parse(init.body); body = JSON.parse(outer.messages[1].content); system = outer.messages[0].content; return response({ assignments: [] }); } });
+  assert.equal(body.feedback[0].code, 'bad_option');
+  assert.equal(body.feedback[0].previousValue, '硕士');
+  assert.equal(body.feedback[0].options[0].optionId, 'option-0');
+  assert.equal(body.fillNoneWhenEmpty, true);
+  assert.match(system, /修正轮/);
+  assert.match(system, /禁止截断/);
+});
+
+test('鉴权、余额、限流和网络问题直接终止，内容问题留给修正轮', async () => {
+  for (const [status, pattern] of [[401, /API Key 无效/], [402, /余额不足/], [429, /过于频繁/], [503, /HTTP 503/]]) {
+    await assert.rejects(request({ fetchImpl: async () => ({ ok: false, status }) }), error => error.fatal === true && pattern.test(error.message));
+  }
+  await assert.rejects(request({ fetchImpl: async () => raw('不是 JSON') }), error => error.fatal === false && /JSON/.test(error.message));
+  await assert.rejects(request({ fetchImpl: async () => raw('{"assignments":[]}', 'length') }), error => error.fatal === false && /未完整结束/.test(error.message));
+  await assert.rejects(request({ fetchImpl: async () => raw('') }), error => error.fatal === false && /空内容/.test(error.message));
+  await assert.rejects(request({ fetchImpl: async () => ({ ok: false, status: 401, text: async () => 'secret-body' }) }), error => !error.message.includes('secret-body'));
+});
+
+test('Key 缺失、超时或字段数量异常时不产生额外请求', async () => {
   let called = false;
-  await assert.rejects(client.requestAssignments({ fields: [field], sources, settings: {}, fetchImpl: async () => { called = true; } }), /API Key/);
-  assert.equal(called, false);
-  await assert.rejects(client.requestAssignments({ fields: [field], sources, settings, fetchImpl: async () => ({ ok: false, status: 401, json: async () => { throw new Error('不应读取'); } }) }), /Key 无效/);
-});
-
-test('余额不足、限流、超时和不完整回答会停止，不重试计费', async () => {
-  for (const [status, expected] of [[402, /余额不足/], [429, /频繁/], [503, /HTTP 503/]]) await assert.rejects(client.requestAssignments({ fields: [field], sources, settings, fetchImpl: async () => ({ ok: false, status }) }), expected);
-  for (const data of [response(''), response('invalid-json'), response({ assignments: [assignment] }, 'length')]) await assert.rejects(client.requestAssignments({ fields: [field], sources, settings, fetchImpl: async () => data }));
+  await assert.rejects(client.requestAssignments({ fields: [field], text, settings: { apiKey: '   ' }, fetchImpl: async () => { called = true; } }), /API Key/);
+  await assert.rejects(request({ fields: [], fetchImpl: async () => { called = true; } }), /字段数量/);
+  await assert.rejects(request({ fields: Array.from({ length: client.BATCH_SIZE + 1 }, () => field), fetchImpl: async () => { called = true; } }), /字段数量/);
   let calls = 0;
-  await assert.rejects(client.requestAssignments({ fields: [field], sources, settings, timeoutMs: 10, fetchImpl: async (_url, { signal }) => {
-    calls++; return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted'))));
-  } }), /超时/);
+  await assert.rejects(request({ timeoutMs: 10, fetchImpl: async (_url, { signal }) => { calls++; return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')))); } }), error => error.fatal === true && /超时/.test(error.message));
   assert.equal(calls, 1);
-});
-
-test('空文本和空 JSON 不算有效资料，清空后忽略旧键值补充但保留原 JSON', () => {
-  assert.equal(client.hasData({ name: '', family: [], supplementText: '   ' }), false);
-  assert.equal(client.hasData({ extraInfo: [{ label: '驾驶证', value: 'C1' }], supplementText: '' }), false);
-  assert.equal(client.hasData({ name: '张三', supplementText: '' }), true);
-  assert.equal(client.hasData({ supplementText: '我叫张三' }), true);
-  assert.throws(() => client.buildSources(['不应是数组']), /JSON 对象/);
+  assert.equal(called, false);
 });

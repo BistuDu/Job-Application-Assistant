@@ -10,24 +10,24 @@
 <div class="wrap">
   <header>
     <div class="logo"><span class="dot">📋</span>网申助手</div>
-    <div class="header-actions"><button id="btn-open-home" class="btn ghost sm">固定窗口</button><div class="ver">v3.0</div></div>
+    <div class="header-actions"><button id="btn-open-home" class="btn ghost sm">固定窗口</button><div class="ver">v3.1</div></div>
   </header>
 
   <div class="card" id="profile-card">
-    <div class="card-title">简历画像</div>
+    <div class="card-title">我的资料</div>
     <div id="profile-status" class="profile-status">正在读取…</div>
     <div class="btn-row">
-      <button id="btn-add-profile" class="btn primary sm">➕ 新增信息</button>
-      <button id="btn-edit" class="btn ghost sm">📝 完整编辑</button>
+      <button id="btn-add-profile" class="btn primary sm">➕ 快速补充</button>
+      <button id="btn-edit" class="btn ghost sm">✏️ 编辑资料</button>
     </div>
   </div>
 
   <details id="quick-profile" class="settings card">
-    <summary>新增 / 补充用户信息</summary>
+    <summary>我的资料（文字描述）</summary>
     <form id="quick-profile-form">
-      <label for="supplement-text">补充资料（直接描述）</label>
-      <textarea id="supplement-text" rows="6" maxlength="30000" placeholder="直接粘贴简历片段或用文字补充真实信息，说明属于谁、哪段经历即可。无需填写 JSON 或逐条定义字段。"></textarea>
-      <p class="settings-note">已有 JSON 资料仍由「完整编辑」维护；模型会结合补充文本直接提取内容。保存空文本可清除补充信息。</p>
+      <label for="supplement-text">资料内容</label>
+      <textarea id="supplement-text" rows="6" maxlength="30000" placeholder="用文字描述你的真实信息，说明属于谁、哪段经历即可。例如：姓名张某某，电话13800000000；2023.9-2024.6 在某某公司实习，负责……；母亲李某某，电话13900000000；没有获得过竞赛奖项。"></textarea>
+      <p class="settings-note">资料只以文字保存并整段发送给模型，无需填写 JSON 或逐条定义字段。保存空内容可清除资料。</p>
       <button id="btn-save-profile" class="btn primary sm" type="submit">保存用户信息</button>
       <p id="profile-save-result" class="settings-result" role="status"></p>
     </form>
@@ -43,11 +43,11 @@
     <input type="checkbox" id="opt-protect-existing" checked>
     <span>保护已有信息（仅填空白项）</span>
   </label>
-  <label class="opt-row" title="画像中为空的经历/语言/证书类字段，在网页上自动填「无」；网页是下拉框时自动选「无」选项">
+  <label class="opt-row" title="资料中明确说明某项不存在（如“没有获奖经历”）时，网页对应字段自动填「无」；网页是下拉框时自动选「无」选项">
     <input type="checkbox" id="opt-fill-none" checked>
-    <span>空缺项自动填「无」（没有的经历/证书不用手填）</span>
+    <span>资料说明没有的项自动填「无」</span>
   </label>
-  <p class="model-note">自动参考网申页面同区域已填内容，判断空白项应使用哪些资料。字段描述、已有内容、JSON 资料及补充文本会发送至 DeepSeek。</p>
+  <p class="model-note">自动参考网申页面同区域已填内容，判断空白项应使用哪些资料。字段描述、已有内容及你的资料文本会发送至 DeepSeek；资料文本必须能在原文中逐字核对，模型不能编造。</p>
   <label class="opt-row">
     <input type="checkbox" id="opt-floating" checked>
     <span>网页右下角显示悬浮球</span>
@@ -75,19 +75,19 @@
 
   <details class="help">
     <summary>使用说明</summary>
-    <p class="usage-priority">先用<b>「完整编辑」</b>保存主要资料；信息不足时，再用<b>「新增 / 补充用户信息」</b>补充。</p>
+    <p class="usage-priority">先用<b>「✏️ 编辑资料」</b>用文字写清你的信息；随时可用<b>「➕ 快速补充」</b>追加新内容。</p>
     <div class="usage-section">
       <div class="usage-title">使用步骤</div>
       <ol>
-        <li>点<b>「完整编辑」</b>填写并保存主要资料；额外信息通过<b>「新增信息」</b>补充。</li>
+        <li>点<b>「编辑资料」</b>，用自然语言描述姓名、电话、教育、经历、家庭等真实信息，写明属于谁、哪段经历。</li>
         <li>打开任意企业官网的投递/网申页面。</li>
         <li>在本扩展的 <b>DeepSeek 设置</b>中保存你的 API Key。</li>
-        <li>点击<b>「一键填写本页」</b>，由 DeepSeek 判断并填写。</li>
+        <li>点击<b>「一键填写本页」</b>，由 DeepSeek 判断并填写；结果里会逐条说明未填上的原因，可据此补充资料后重试。</li>
         <li>默认保护已有内容，再次点击只补空白；也可使用网页右下角的悬浮入口。</li>
       </ol>
     </div>
     <div class="usage-note">💡 验证码、简历上传、同意条款等需按页面手动处理。</div>
-    <p class="privacy">🔒 画像和 Key 保存在本机。使用模型时，字段描述、同区域已有内容、JSON 资料及补充文本会发送至 DeepSeek；验证码、上传和同意条款仍需手动处理。</p>
+    <p class="privacy">🔒 资料和 Key 保存在本机。使用模型时，字段描述、同区域已有内容及你的资料文本会发送至 DeepSeek；验证码、上传和同意条款仍需手动处理。</p>
   </details>
 </div>
 <script src="popup.js"></script>

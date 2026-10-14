@@ -69,7 +69,7 @@
     try {
       const state = await send({ type: 'FLOATING_GET_STATUS' });
       setVisible(state.enabled);
-      panel.querySelector('.profile').textContent = state.profileReady ? `画像已保存（${state.fieldCount} 项）${state.configured ? '' : ' · DeepSeek 未配置'}` : '请打开主页，先保存用户信息。';
+      panel.querySelector('.profile').textContent = state.hasText ? `资料已保存（${state.textLength} 字）${state.configured ? '' : ' · DeepSeek 未配置'}` : '请打开主页，先保存用户资料。';
       if (starting) return;
       disable(state.busy);
       if (state.job) {
@@ -77,7 +77,10 @@
         const lines = [job.status === 'running' ? job.phase : job.status === 'error' ? r.error || job.phase : '填写完成', `已填 ${r.filled || 0} 项（DeepSeek ${r.modelFilled || 0}）`];
         if (r.contextFields) lines.push(`结合页面已填信息判断 ${r.contextFields} 个空白字段`);
         if (r.preserved) lines.push(`已保留已有信息 ${r.preserved} 项`);
+        if (r.repaired) lines.push(`按失败原因自动修正 ${r.repaired} 项`);
         if (r.unresolved) lines.push(`待处理 ${r.unresolved} 项`);
+        if (r.issues?.length) lines.push(...r.issues.slice(0, 4).map(item => `· ${item.label}：${item.reason}`));
+        if (r.notes?.length) lines.push(`需你补充：${r.notes.slice(0, 3).join('；')}`);
         if (r.linkedProtected) lines.push(`联动字段需手动 ${r.linkedProtected} 项`);
         if (r.captcha || r.file || r.agreement || r.unsupported) lines.push('验证码、上传、条款及不支持的控件请手动处理。');
         show(lines.join('\n'), job.status === 'error');

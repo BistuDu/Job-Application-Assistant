@@ -1,6 +1,8 @@
-/* 纯模型填写：提取 DOM、保护已有内容并执行经校验的方案。 */
-function FILL_FUNCTION(profile, opts) {
-  profile = profile && typeof profile === 'object' && !Array.isArray(profile) ? profile : {};
+/* 纯文本资料填写：提取 DOM、保护已有内容并执行经校验的方案。
+ * 资料只以文本保存，模型给出的每项内容都必须能在文本中逐字核验；
+ * 写入失败时返回字段级原因码，供有界修复轮构造增量反馈。 */
+async function FILL_FUNCTION(userText, opts) {
+  userText = typeof userText === 'string' ? userText : '';
   opts = opts || {};
   const action = opts.action || 'scan';
   if (!['scan', 'apply', 'cleanup'].includes(action)) throw new Error('不支持的填写操作');
@@ -9,6 +11,9 @@ function FILL_FUNCTION(profile, opts) {
   // 仅用于禁止自动处理验证码/条款；字段归属和选项判断全部交给模型。
   const CAPTCHA_RE = /验证码|captcha|verify|vercode|checkcode|图形码|短信码|校验码|动态码/i;
   const AGREEMENT_RE = /同意|授权|条款|协议|确认填写|声明|承诺|已阅读/i;
+  const ABSENCE_WORD_RE = /^(?:无|暂无|没有|无相关|不适用|不涉及|否)$/;
+  const TEXTUAL_TYPES = ['text', 'search', 'tel', 'url', 'email'];
+  const DATE_TYPES = ['date', 'month', 'time', 'datetime-local', 'week'];
 
   function norm(s) {
     return String(s ?? '').replace(/\s+/g, ' ').replace(/[*：:]/g, '').trim();
@@ -154,90 +159,101 @@ function FILL_FUNCTION(profile, opts) {
     return m[3] ? `${month}-${m[3].padStart(2, '0')}` : null;
   }
 
-  function setVal(el, val) {
-    const type = (el.type || '').toLowerCase();
-    let value = String(val);
-    if (['date', 'month', 'time', 'datetime-local', 'week'].includes(type)) {
-      value = formatTemporal(type, value);
-      if (value === null) return false;
-    }
-    if (el.maxLength >= 0 && value.length > el.maxLength) return false;
+  function constraintDetail(el) {
+    const validity = el.validity || {};
+    const list = [];
+    if (validity.patternMismatch) list.push(el.pattern ? `不符合格式要求（pattern=${el.pattern}）` : '不符合格式要求');
+    if (validity.rangeUnderflow) list.push(`小于允许的最小值 ${el.min}`);
+    if (validity.rangeOverflow) list.push(`大于允许的最大值 ${el.max}`);
+    if (validity.stepMismatch) list.push(`不符合步长 ${el.step}`);
+    if (validity.typeMismatch) list.push(`不是有效的 ${el.type} 格式`);
+    if (validity.tooLong) list.push(`超过长度上限 ${el.maxLength}`);
+    if (validity.badInput) list.push('浏览器无法识别该输入');
+    return list.join('；') || String(el.validationMessage || '不符合输入框校验要求').slice(0, 80);
+  }
+
+  /* 三种写入手法按序尝试：原生 setter → setRangeText → 聚焦后 insertText。
+   * 框架接管 value 时前一种会失效，后一种模拟真实输入路径；每种成功后都补发事件。 */
+  function setNativeValue(el, value) {
     const setter = nativeSetter(el);
-    const before = el.value;
-    if (setter) setter.call(el, value); else el.value = value;
-    if (el.value !== value || el.validity && !el.validity.valid) {
-      if (setter) setter.call(el, before); else el.value = before;
-      return false;
-    }
+    if (!setter) return false;
+    try { setter.call(el, value); } catch (_) { return false; }
+    return el.value === value;
+  }
+
+  function selectable(el) {
+    return el.tagName === 'TEXTAREA' || TEXTUAL_TYPES.includes((el.type || '').toLowerCase());
+  }
+
+  function setRangeTextValue(el, value) {
+    if (!selectable(el) || String(el.value) === value) return false;
+    try { el.setRangeText(value, 0, el.value.length, 'end'); } catch (_) { return false; }
     emitChanges(el);
     return el.value === value;
+  }
+
+  function insertTextValue(el, value) {
+    if (!selectable(el) || String(el.value) === value) return false;
+    try {
+      el.focus({ preventScroll: true });
+      if (typeof el.setSelectionRange === 'function') el.setSelectionRange(0, el.value.length);
+      const inserted = typeof document.execCommand === 'function' && document.execCommand('insertText', false, value);
+      emitChanges(el);
+      return !!inserted && el.value === value;
+    } catch (_) { return false; }
+  }
+
+  function writeTextValue(el, value) {
+    if (setNativeValue(el, value)) { emitChanges(el); return el.value === value; }
+    return setRangeTextValue(el, value) || insertTextValue(el, value);
+  }
+
+  function readBack(el) {
+    return el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' ? String(el.value) : null;
+  }
+
+  /* 单字段写入；失败时返回原因码与可读细节，供修复轮使用。 */
+  function writeText(el, rawValue) {
+    const type = (el.type || '').toLowerCase();
+    let value = String(rawValue);
+    if (DATE_TYPES.includes(type)) {
+      const formatted = formatTemporal(type, value);
+      if (formatted === null) return { code: 'date_format', detail: `资料中的「${value.slice(0, 30)}」不符合该日期字段要求的格式` };
+      value = formatted;
+    }
+    if (el.maxLength >= 0 && value.length > el.maxLength) return { code: 'too_long', detail: `输入上限 ${el.maxLength} 字，资料内容 ${value.length} 字` };
+    const before = el.value;
+    if (!writeTextValue(el, value)) return { code: 'unsettable', detail: '页面控件不接受自动写入' };
+    if (el.validity && !el.validity.valid) {
+      const detail = constraintDetail(el);
+      setNativeValue(el, before);
+      return { code: 'constraint', detail };
+    }
+    return { ok: true, value };
+  }
+
+  /* 资料文本是唯一事实来源：只接受能逐字核验的内容。 */
+  function transformSource(value, transform) {
+    if (!transform || transform === 'original') return value;
+    if (typeof value !== 'string') return undefined;
+    const dates = value.match(/(?<!\d)\d{4}(?:年\d{1,2}月(?:\d{1,2}日)?|([./-])\d{1,2}(?:\1\d{1,2}(?!\d))?)?(?!\d)/g);
+    if (!dates?.length) return undefined;
+    if (transform === 'year') return dates[0].slice(0, 4);
+    if (transform === 'startDate') return dates[0];
+    if (transform === 'endDate') return dates.length > 1 ? dates[dates.length - 1] : undefined;
+    return undefined;
+  }
+
+  /* 模型返回的 JSON 来源或原文摘录；不执行模型代码。
+   * 保存真实节点引用和指纹，防止 API 等待期间 DOM 重排造成错填。 */
+  const sessions = globalThis.__jhFillSessions || (globalThis.__jhFillSessions = new Map());
+  for (const [token, session] of sessions) {
+    if (Date.now() - session.createdAt > 10 * 60 * 1000) sessions.delete(token);
   }
 
   function radioGroup(el) {
     const group = el.name ? el.getRootNode().querySelectorAll('input[type="radio"]') : [el];
     return Array.from(group).filter(r => r.type === 'radio' && r.name === el.name && r.form === el.form);
-  }
-
-  /* 对象数组 → 可读文本（适用于 experiences/campus/awards/projects/papers/volunteer/family/research/competitions） */
-  function formatArray(val) {
-    if (!Array.isArray(val) || !val.length) return String(val || '');
-    if (typeof val[0] !== 'object' || !val[0]) return val.join('、');
-
-    return val.map(e => {
-      // 经历/志愿类（org/role/time/desc + 可选 salary/reason/referee）
-      if (e.org) {
-        let parts = [e.org, e.role].filter(Boolean).join(' ');
-        if (e.time) parts += `（${e.time}）`;
-        if (e.desc) parts += `：${e.desc}`;
-        if (e.salary) parts += `，薪资：${e.salary}`;
-        if (e.reason) parts += `，离职原因：${e.reason}`;
-        if (e.referee) {
-          parts += `，证明人：${e.referee}`;
-          if (e.refereePhone) parts += `（${e.refereePhone}）`;
-        }
-        return parts;
-      }
-      // 家庭成员类（relation/name/age/politics/company/position/phone）
-      if (e.relation) {
-        let parts = [e.relation, e.name, e.company, e.position].filter(Boolean).join(' ');
-        if (e.age) parts += `（${e.age}岁）`;
-        if (e.politics) parts += `，政治面貌：${e.politics}`;
-        if (e.phone) parts += `，电话：${e.phone}`;
-        return parts;
-      }
-      // 竞赛类（name/level/award/time）— award 字段存在时区分于获奖
-      if (e.name && e.award !== undefined) {
-        return [e.name, e.level, e.award, e.time].filter(v => v !== null && v !== undefined && v !== '').join(' ');
-      }
-      // 论文类（title/journal/year）
-      if (e.title) {
-        return [e.title, e.journal, e.year].filter(Boolean).join('，');
-      }
-      // 项目/科研类（name/role/time/desc）— 有 role 或 desc 区分于获奖
-      if (e.project || (e.name && (e.role || e.desc))) {
-        return [(e.project || e.name), e.role].filter(Boolean).join(' ')
-          + (e.time ? `（${e.time}）` : '')
-          + (e.desc ? `：${e.desc}` : '');
-      }
-      // 获奖类（name/level/time）— 无 role/desc 的纯获奖
-      if (e.name || e.award) {
-        const parts = [];
-        if (e.name) parts.push(e.name);
-        if (e.award) parts.push(e.award);
-        if (e.level) parts.push(e.level);
-        if (e.time) parts.push(e.time);
-        return parts.join(' ');
-      }
-      // 兜底：拼接所有非空值
-      return Object.values(e).filter(v => v !== null && v !== undefined && v !== '').join(' ');
-    }).join('\n');
-  }
-
-  /* 模型返回 JSON 来源或有原文依据的文本与选项；不执行模型代码。
-   * 保存真实节点引用和指纹，防止 API 等待期间 DOM 重排造成错填。 */
-  const sessions = globalThis.__jhFillSessions || (globalThis.__jhFillSessions = new Map());
-  for (const [token, session] of sessions) {
-    if (Date.now() - session.createdAt > 10 * 60 * 1000) sessions.delete(token);
   }
 
   function describeField(el, probe) {
@@ -333,27 +349,37 @@ function FILL_FUNCTION(profile, opts) {
     });
   }
 
-  function resolveSource(path) {
-    if (typeof path !== 'string' || !/^[a-zA-Z][a-zA-Z0-9]*(?:\.(?:[a-zA-Z][a-zA-Z0-9]*|0|[1-9]\d*))*$/.test(path)) return undefined;
-    const parts = path.split('.');
-    if (parts.some(part => ['__proto__', 'constructor', 'prototype', 'supplementText'].includes(part))) return undefined;
-    let value = profile;
-    for (const part of parts) {
-      if (!value || typeof value !== 'object' || !Object.hasOwn(value, part)) return undefined;
-      value = value[part];
+  /* 快照比对：字段、选项、上下文任何一个变化都拒绝写入，避免错填到新内容上。 */
+  function checkStale(el, record, session) {
+    if (!el.isConnected) return '字段已被页面移除';
+    if (!visible(el)) return '字段变为不可见';
+    if (el.matches(':disabled') || el.readOnly) return '字段变为禁用或只读';
+    if (record.signature !== JSON.stringify(describeField(el, probeText(el)))) return '字段标签或选项已变化';
+    if (record.baseline !== baseline(el)) return '字段内容已变化';
+    for (const context of record.contextRecords) {
+      if (!context.el.isConnected || context.scope !== contextScope(context.el)) return '同区域其他字段已变化';
+      const selfWritten = session.written.has(context.el) && session.written.get(context.el) === baseline(context.el);
+      if (!selfWritten && context.signature !== JSON.stringify(readExistingContext(context.el))) return '同区域已填内容已变化';
     }
-    return value;
+    return null;
   }
 
-  function transformSource(value, path, transform) {
-    if (!transform || transform === 'original') return value;
-    if (typeof value !== 'string') return undefined;
-    const dates = value.match(/(?<!\d)\d{4}(?:年\d{1,2}月(?:\d{1,2}日)?|([./-])\d{1,2}(?:\1\d{1,2}(?!\d))?)?(?!\d)/g);
-    if (!dates?.length) return undefined;
-    if (transform === 'year') return dates[0].slice(0, 4);
-    if (transform === 'startDate') return dates[0];
-    if (transform === 'endDate') return dates.length > 1 ? dates[dates.length - 1] : undefined;
-    return undefined;
+  function summarize(outcomes) {
+    const result = { filled: 0, filledNone: 0, skipped: 0, stale: 0, preserved: 0, linkedProtected: 0, outcomes, filledFieldIds: [], preservedFieldIds: [] };
+    for (const outcome of outcomes) {
+      if (outcome.status === 'filled') {
+        result.filled++;
+        if (outcome.fillNone) result.filledNone++;
+        result.filledFieldIds.push(outcome.fieldId);
+      } else if (outcome.status === 'preserved') {
+        result.preserved++; result.skipped++; result.preservedFieldIds.push(outcome.fieldId);
+      } else {
+        result.skipped++;
+        if (outcome.code === 'stale') result.stale++;
+        if (outcome.code === 'linked') result.linkedProtected++;
+      }
+    }
+    return result;
   }
 
   if (action === 'cleanup') {
@@ -363,71 +389,98 @@ function FILL_FUNCTION(profile, opts) {
 
   if (action === 'apply') {
     const session = sessions.get(opts.snapshotToken);
-    const result = { filled: 0, filledNone: 0, skipped: 0, stale: 0, invalid: 0, missingData: 0, preserved: 0, linkedProtected: 0, filledFieldIds: [], preservedFieldIds: [] };
     const assignments = Array.isArray(opts.assignments) ? opts.assignments : [];
-    if (!session || session.url !== location.href) return { ...result, stale: assignments.length, skipped: assignments.length };
+    const outcomes = [];
+    if (!session || session.url !== location.href) {
+      for (const assignment of assignments) outcomes.push({ fieldId: assignment?.fieldId, label: '', status: 'skipped', code: 'stale', detail: '页面已跳转或重新加载' });
+      return summarize(outcomes);
+    }
+    const compact = value => String(value).replace(/\s+/g, '');
+    const written = [];
     for (const assignment of assignments) {
       const record = session.entries.get(assignment?.fieldId);
-      if (!record || session.used.has(assignment.fieldId)) { result.invalid++; result.skipped++; continue; }
-      session.used.add(assignment.fieldId);
+      const label = record?.description?.label || '';
+      const push = outcome => { const record = { fieldId: assignment?.fieldId, label, ...outcome }; outcomes.push(record); return record; };
+      const attempts = session.attempts.get(assignment?.fieldId) || 0;
+      if (!record || attempts >= 3) { push({ status: 'skipped', code: 'record', detail: '字段已失效或重复提交' }); continue; }
+      session.attempts.set(assignment.fieldId, attempts + 1);
       const el = record.el;
-      const probe = probeText(el);
-      if (!ALLOW_OVERWRITE && el.isConnected && hasExistingValue(el)) {
-        result.preserved++; result.skipped++; result.preservedFieldIds.push(assignment.fieldId); continue;
-      }
-      if (!el.isConnected || !visible(el) || el.matches(':disabled') || el.readOnly
-          || record.contextRecords.some(c => !c.el.isConnected || c.scope !== contextScope(c.el)
-            || !(session.written.has(c.el) && session.written.get(c.el) === baseline(c.el)) && c.signature !== JSON.stringify(readExistingContext(c.el)))
-          || record.signature !== JSON.stringify(describeField(el, probe)) || record.baseline !== baseline(el)) {
-        result.stale++; result.skipped++; continue;
-      }
-      if (hasProtectedDependent(el)) { result.linkedProtected++; result.skipped++; continue; }
-      let value = assignment.sourcePath ? resolveSource(assignment.sourcePath) : undefined;
-      if (assignment.sourcePath == null && typeof assignment.value === 'string') {
-        const text = typeof profile.supplementText === 'string' ? profile.supplementText : '';
+      if (!ALLOW_OVERWRITE && el.isConnected && hasExistingValue(el)) { push({ status: 'preserved', code: 'preserved', detail: '页面已有内容，已保留' }); continue; }
+      const staleReason = checkStale(el, record, session);
+      if (staleReason) { push({ status: 'skipped', code: 'stale', detail: staleReason }); continue; }
+      if (hasProtectedDependent(el)) { push({ status: 'skipped', code: 'linked', detail: '地区联动字段，需手动选择' }); continue; }
+      if (typeof assignment.value !== 'string' || !assignment.value.trim()) { push({ status: 'skipped', code: 'no_value', detail: '模型未给出内容' }); continue; }
+      const value = assignment.value.trim();
+      if (assignment.fillNone === true) {
+        if (!FILL_NONE || !ABSENCE_WORD_RE.test(value)) { push({ status: 'skipped', code: 'bad_fillnone', detail: '未经允许不能填「无」' }); continue; }
+      } else {
         const quote = assignment.evidenceQuote;
-        const compact = text => text.replace(/\s+/g, '');
-        if (typeof quote !== 'string' || !quote || !text.includes(quote) || !compact(quote).includes(compact(assignment.value))) {
-          result.invalid++; result.skipped++; continue;
+        if (typeof quote !== 'string' || !quote || !userText.includes(quote) || !compact(quote).includes(compact(value))) {
+          push({ status: 'skipped', code: 'evidence_mismatch', detail: '内容与资料原文对不上', value: value.slice(0, 200) });
+          continue;
         }
-        value = assignment.value;
       }
-      value = transformSource(value, assignment.sourcePath || '', assignment.transform);
-      const empty = value == null || Array.isArray(value) && !value.length || String(value).trim() === '';
-      const useNone = value !== undefined && empty && FILL_NONE && assignment.fillNone === true && assignment.sourcePath != null;
-      if (Array.isArray(value)) value = formatArray(value);
-      if (!useNone && (empty || typeof value === 'object')) { result.missingData++; result.skipped++; continue; }
-      value = useNone ? '无' : String(value);
-      try {
-        let success = false;
-        if (assignment.optionId != null) {
-          const index = record.description.options.findIndex(o => o.optionId === assignment.optionId);
-          const option = record.choices[index];
-          if (option && option.isConnected && !option.disabled) {
-            if (el.tagName === 'SELECT' && el.contains(option)) { const selectedIndex = option.index; el.selectedIndex = selectedIndex; emitChanges(el); success = el.selectedIndex === selectedIndex; }
-            else if (el.type === 'radio') { if (!option.checked) option.click(); success = option.checked; }
-          }
-        } else if (el.tagName !== 'SELECT' && el.type !== 'radio') success = setVal(el, value);
-        if (success) {
-          session.written.set(el, baseline(el)); // 允许本任务明确覆盖的值；后续用户改动仍会使上下文失效。
-          result.filled++;
-          if (useNone) result.filledNone++;
-          result.filledFieldIds.push(assignment.fieldId);
-        } else { result.invalid++; result.skipped++; }
-      } catch (_) { result.invalid++; result.skipped++; }
+      const transformed = assignment.fillNone === true ? value : transformSource(value, assignment.transform);
+      if (transformed === undefined) { push({ status: 'skipped', code: 'date_format', detail: '无法从资料文本中取出该字段需要的日期', value: value.slice(0, 200) }); continue; }
+      const finalValue = String(transformed);
+      const filled = { status: 'filled', code: 'ok', fillNone: assignment.fillNone === true, value: finalValue };
+      if (assignment.optionId != null) {
+        const index = record.description.options.findIndex(option => option.optionId === assignment.optionId);
+        const option = index >= 0 ? record.choices[index] : null;
+        if (!option || !option.isConnected || option.disabled) { push({ status: 'skipped', code: 'bad_option', detail: '该选项已不存在或不可选', value: finalValue }); continue; }
+        let selected = false;
+        if (el.tagName === 'SELECT' && el.contains(option)) {
+          const selectedIndex = option.index;
+          el.selectedIndex = selectedIndex;
+          emitChanges(el);
+          selected = el.selectedIndex === selectedIndex;
+        } else if (el.type === 'radio') {
+          if (!option.checked) option.click();
+          if (!option.checked) { option.checked = true; emitChanges(option); }
+          selected = option.checked;
+        }
+        if (!selected) { push({ status: 'skipped', code: 'bad_option', detail: '无法选中该选项', value: finalValue }); continue; }
+        session.written.set(el, baseline(el));
+        push(filled);
+        continue;
+      }
+      if (el.tagName === 'SELECT' || el.type === 'radio') { push({ status: 'skipped', code: 'no_option', detail: '下拉或单选没有给出选项', value: finalValue }); continue; }
+      const write = writeText(el, finalValue);
+      if (!write.ok) { push({ status: 'skipped', code: write.code, detail: write.detail, value: finalValue.slice(0, 200) }); continue; }
+      session.written.set(el, baseline(el));
+      const outcome = push({ status: 'filled', code: 'ok', fillNone: assignment.fillNone === true, value: write.value });
+      written.push({ el, value: write.value, outcome });
+    }
+    // 延迟复检：只认 input/change/blur 的组件常在此刻还原值，还原的当场重写一次。
+    if (written.length) {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      for (const item of written) {
+        if (readBack(item.el) === item.value) continue;
+        const retry = writeText(item.el, item.value);
+        let recovered = !!retry.ok;
+        if (recovered) {
+          await new Promise(resolve => setTimeout(resolve, 80));
+          recovered = readBack(item.el) === retry.value;
+        }
+        if (recovered) continue;
+        item.outcome.status = 'skipped';
+        item.outcome.code = 'reverted';
+        item.outcome.detail = '填写后被页面脚本还原，该控件不支持自动填写';
+      }
     }
     if (opts.finish) sessions.delete(opts.snapshotToken);
-    return result;
+    return summarize(outcomes);
   }
 
   const collectModel = action === 'scan';
   const snapshotToken = collectModel ? Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('') : null;
-  const session = collectModel ? { createdAt: Date.now(), url: location.href, entries: new Map(), used: new Set(), written: new Map() } : null;
+  const session = collectModel ? { createdAt: Date.now(), url: location.href, entries: new Map(), attempts: new Map(), written: new Map() } : null;
   if (session) {
     if (sessions.size >= 5) sessions.delete(sessions.keys().next().value);
     sessions.set(snapshotToken, session);
   }
   const modelFields = [];
+  const skippedFields = [];
   const els = Array.from(document.querySelectorAll('input,select,textarea'));
   // 一次性读取点击时已有的值，本次新写入的内容不能作为后续判断依据。
   const contextRecords = collectModel ? els.flatMap((el, index) => {
@@ -455,11 +508,12 @@ function FILL_FUNCTION(profile, opts) {
   let filled = 0, skipped = 0, captcha = 0, file = 0, unsupported = 0, agreement = 0;
   let preserved = 0, linkedProtected = 0;
   const seen = new Set();
+  const noteSkipped = (label, code) => { if (skippedFields.length < 24) skippedFields.push({ label: String(label || '未命名字段').slice(0, 60), code }); };
 
   for (const [index, el] of els.entries()) {
     const type = (el.type || '').toLowerCase();
     // 文件上传直接跳过
-    if (type === 'file') { file++; continue; }
+    if (type === 'file') { file++; noteSkipped(probeText(el).label, 'file'); continue; }
     if (['hidden', 'submit', 'button', 'reset', 'image'].includes(type)) continue;
     if (!visible(el) || el.matches(':disabled')) continue;
     if (seen.has(el)) continue;
@@ -467,10 +521,10 @@ function FILL_FUNCTION(profile, opts) {
 
     const probe = probeText(el);
     const evidence = probe.sources.map(s => s.text).join(' ');
-    if (CAPTCHA_RE.test(evidence)) { captcha++; continue; }
-    if (AGREEMENT_RE.test(evidence)) { agreement++; continue; }
+    if (CAPTCHA_RE.test(evidence)) { captcha++; noteSkipped(probe.label, 'captcha'); continue; }
+    if (AGREEMENT_RE.test(evidence)) { agreement++; noteSkipped(probe.label, 'agreement'); continue; }
     if (el.readOnly || ['password', 'checkbox', 'range', 'color'].includes(type) || el.multiple) {
-      unsupported++; skipped++; continue;
+      unsupported++; skipped++; noteSkipped(probe.label, 'unsupported'); continue;
     }
     if (!ALLOW_OVERWRITE && hasExistingValue(el)) {
       if (type === 'radio') radioGroup(el).forEach(r => seen.add(r));
@@ -479,6 +533,7 @@ function FILL_FUNCTION(profile, opts) {
     }
     if (hasProtectedDependent(el)) {
       linkedProtected++;
+      noteSkipped(probe.label, 'linked');
       continue;
     }
     if (type === 'radio') radioGroup(el).forEach(r => seen.add(r));
@@ -486,7 +541,7 @@ function FILL_FUNCTION(profile, opts) {
   }
 
   return { filled, skipped, captcha, file, unsupported, agreement, preserved, linkedProtected,
-    modelFields, snapshotToken };
+    modelFields, skippedFields, snapshotToken };
 
 }
 

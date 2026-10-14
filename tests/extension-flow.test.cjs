@@ -7,19 +7,21 @@ const vm = require('node:vm');
 const { webcrypto } = require('node:crypto');
 
 const root = path.resolve(__dirname, '..');
+const DEFAULT_TEXT = '我叫张三，联系号码是13800138000。';
 let browser;
 before(async () => { browser = await chromium.launch({ channel: process.env.TEST_BROWSER_CHANNEL || 'chrome', headless: true }); });
 after(async () => { if (browser) await browser.close(); });
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-// 真正执行后台、客户端、弹窗和 DOM 引擎；只替换 chrome API 与外部 DeepSeek 网络。
-async function setup({ configured = true, delayed = false, failing = false, previousJob = null, modelReply = null } = {}) {
+const fillItem = (fieldId, value, quote, extra = {}) => ({ fieldId, value, evidenceQuote: quote, optionId: null, transform: 'original', fillNone: false, note: null, ...extra });
+// 真正执行后台、客户端、弹窗、编辑器、悬浮球和 DOM 引擎；只替换 chrome API 与外部 DeepSeek 网络。
+async function setup({ configured = true, delayed = false, failing = false, previousJob = null, modelReply = null, local = null } = {}) {
   const pages = [];
   const form = await browser.newPage();
   pages.push(form);
   await form.setContent('<p><label>姓名<input id="name"></label></p><p><label>常用联络号码<input id="contact"></label></p>');
-  const local = { profile: { name: '张三', phone: '13800138000' }, fillNoneWhenEmpty: true };
-  if (configured) local.deepseek = { apiKey: 'test-key-not-a-real-credential', model: 'deepseek-flash' };
+  const store = local || { userText: DEFAULT_TEXT, fillNoneWhenEmpty: true };
+  if (configured) store.deepseek = { apiKey: 'test-key-not-a-real-credential', model: 'deepseek-flash' };
   const session = previousJob ? { fillJob: previousJob } : {};
   const requests = [], injections = [], windows = [];
   let listener;
@@ -34,7 +36,7 @@ async function setup({ configured = true, delayed = false, failing = false, prev
     };
   }
   const chrome = {
-    storage: { local: storage(local), session: storage(session) },
+    storage: { local: storage(store), session: storage(session) },
     tabs: {
       get: async id => ({ id, windowId: 1, url: 'https://jobs.example/apply' }),
       query: async () => [{ id: 7, url: 'https://jobs.example/apply' }],
@@ -59,10 +61,9 @@ async function setup({ configured = true, delayed = false, failing = false, prev
       await gate;
       if (failing) return { ok: false, status: 401 };
       const payload = JSON.parse(body.messages[1].content);
-      const { fields } = payload;
-      return { ok: true, json: async () => ({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ assignments: modelReply ? modelReply(payload) : fields.map(field => ({
-        fieldId: field.fieldId, sourcePath: field.label === '姓名' ? 'name' : 'phone', optionId: null, transform: 'original',
-      })) }) } }] }) };
+      const { fields, text } = payload;
+      const reply = modelReply ? modelReply(payload, text) : { assignments: fields.map(field => fillItem(field.fieldId, field.label === '姓名' ? '张三' : '13800138000', field.label === '姓名' ? '我叫张三' : '联系号码是13800138000。')) };
+      return { ok: true, json: async () => ({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(reply) } }] }) };
     },
   });
   context.importScripts = (...files) => files.forEach(file => vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context));
@@ -95,7 +96,7 @@ async function setup({ configured = true, delayed = false, failing = false, prev
     return page;
   }
   async function done(previousId = null) {
-    for (let count = 0; count < 250; count++) {
+    for (let count = 0; count < 300; count++) {
       if (session.fillJob && session.fillJob.id !== previousId && session.fillJob.status !== 'running') return session.fillJob;
       await wait(20);
     }
@@ -123,15 +124,14 @@ async function setup({ configured = true, delayed = false, failing = false, prev
     const page = await browser.newPage();
     pages.push(page);
     await page.exposeFunction('__localGet', keys => chrome.storage.local.get(keys));
-    await page.exposeFunction('__localSet', data => chrome.storage.local.set(data));
     await page.exposeFunction('__extensionMessage', send);
     await page.setContent(fs.readFileSync(path.join(root, 'editor.html'), 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, '').replace(/<link[^>]*>/g, ''));
     await page.evaluate(() => {
-      window.chrome = { runtime: { sendMessage: message => window.__extensionMessage(message) }, storage: { local: { get: (keys, callback) => window.__localGet(keys).then(callback), set: (data, callback) => window.__localSet(data).then(() => callback?.()) } } };
+      window.chrome = { runtime: { sendMessage: message => window.__extensionMessage(message) }, storage: { local: { get: (keys, callback) => window.__localGet(keys).then(callback) }, onChanged: { addListener: () => {} } } };
     });
     await page.addScriptTag({ content: fs.readFileSync(path.join(root, 'editor.js'), 'utf8') });
     await page.evaluate(() => document.dispatchEvent(new Event('DOMContentLoaded')));
-    await page.waitForFunction(() => document.querySelector('[data-key="name"]').value === '张三');
+    await page.waitForFunction(() => document.getElementById('profile-text').value.length > 0);
     return page;
   }
   async function floatClick(selector) {
@@ -141,13 +141,13 @@ async function setup({ configured = true, delayed = false, failing = false, prev
     }, selector);
     await form.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
   }
-  return { form, local, session, requests, injections, windows, send, openPopup, openEditor, done, waitingModel, release, mountFloating, floatClick,
+  return { form, local: store, session, requests, injections, windows, send, openPopup, openEditor, done, waitingModel, release, mountFloating, floatClick,
     close: async () => { release?.(); if (session.fillJob?.status === 'running') await done(); for (const page of pages) if (!page.isClosed()) await page.close(); },
   };
 }
 
 
-test('主页只有一个填写按钮，已有JSON资料直接走模型路径', async () => {
+test('主页只有一个填写按钮，文本资料直接走模型路径', async () => {
   const app = await setup();
   try {
     const popup = await app.openPopup();
@@ -156,6 +156,7 @@ test('主页只有一个填写按钮，已有JSON资料直接走模型路径', a
     await popup.locator('#btn-fill-model').click();
     const job = await app.done();
     assert.equal(job.result.filled, 2);
+    assert.equal(job.result.repaired, 0);
     assert.equal(await app.form.locator('#name').inputValue(), '张三');
     assert.deepEqual(app.injections.map(i => i.action), ['scan', 'apply', 'cleanup']);
     await popup.waitForFunction(() => !document.getElementById('btn-fill-model').disabled);
@@ -164,72 +165,117 @@ test('主页只有一个填写按钮，已有JSON资料直接走模型路径', a
   } finally { await app.close(); }
 });
 
-test('新增自由文本保存且不损失 JSON 资料，旧键值信息可作为文本编辑', async () => {
+test('快速补充对话框保存的就是完整资料文本', async () => {
   const app = await setup();
-  app.local.profile.experiences = [{ org: '原公司', role: '实习生' }];
-  app.local.profile.extraInfo = [{ label: '驾驶证', value: 'C1' }];
   try {
     const popup = await app.openPopup(); await popup.locator('#btn-add-profile').click();
-    assert.equal(await popup.locator('#supplement-text').inputValue(), '驾驶证：C1');
-    const text = '母亲叫李五，电话为13900000002。\n我的驾驶证现在为C2。';
+    assert.equal(await popup.locator('#supplement-text').inputValue(), DEFAULT_TEXT);
+    const text = '我叫张三，联系号码是13800138000。\n母亲叫李五，电话为13900000002。';
     await popup.locator('#supplement-text').fill(text); await popup.locator('#btn-save-profile').click();
     await popup.waitForFunction(() => document.getElementById('profile-save-result').textContent.includes('已保存'));
-    assert.equal(app.local.profile.supplementText, text);
-    assert.equal(app.local.profile.name, '张三');
-    assert.deepEqual(app.local.profile.experiences, [{ org: '原公司', role: '实习生' }]);
-    assert.deepEqual(app.local.profile.extraInfo, [{ label: '驾驶证', value: 'C1' }]);
-    await popup.locator('.wrap').screenshot({ path: path.join(root, '.test-artifacts/text-supplement.png') });
+    assert.equal(app.local.userText, text);
+    assert.equal(app.local.profile, undefined);
+    await popup.waitForFunction(() => document.getElementById('profile-status').textContent.includes('已保存'));
+    await popup.locator('.wrap').screenshot({ path: path.join(root, '.test-artifacts/text-profile.png') });
   } finally { await app.close(); }
 });
 
-test('完整编辑继续使用 JSON 保存并保留补充文本，导出包含两者', async () => {
-  const app = await setup(); app.local.profile.supplementText = '母亲叫李五。';
+test('资料编辑器只保存文本并统计字数', async () => {
+  const app = await setup();
   try {
     const editor = await app.openEditor();
-    await editor.locator('[data-key="city"]').fill('杭州'); await editor.locator('#btn-save').click();
-    await editor.waitForFunction(() => document.getElementById('save-toast').textContent === '画像已保存');
-    assert.equal(app.local.profile.city, '杭州'); assert.equal(app.local.profile.supplementText, '母亲叫李五。');
-    await editor.locator('#btn-export-json').click();
-    await editor.locator('#dlg-export').waitFor({ state: 'visible' });
-    const exported = JSON.parse(await editor.locator('#export-area').inputValue());
-    assert.equal(exported.supplementText, app.local.profile.supplementText); assert.equal(exported.name, '张三');
+    assert.equal(await editor.locator('#profile-text').inputValue(), DEFAULT_TEXT);
+    assert.equal(await editor.locator('#char-count').textContent(), `${DEFAULT_TEXT.length} / 30000 字`);
+    const text = '我叫张三，联系号码是13800138000。驾驶证类别为C1。';
+    await editor.locator('#profile-text').fill(text);
+    await editor.locator('#btn-save').click();
+    await editor.waitForFunction(() => document.getElementById('save-toast').textContent === '资料已保存');
+    assert.equal(app.local.userText, text);
+    await editor.locator('#profile-text').fill('');
+    await editor.locator('#btn-example').click();
+    assert.ok((await editor.locator('#profile-text').inputValue()).includes('姓名'));
   } finally { await app.close(); }
 });
 
-test('模型同时读取 JSON 与补充文本，按页面母亲关系取姓名和原文电话', async () => {
-  const text = '母亲的电话已更新为13900000002。';
-  const app = await setup({ modelReply: payload => payload.fields.map(f => f.label === '姓名' ? {
-    fieldId: f.fieldId, sourcePath: 'family.1.name', optionId: null,
-  } : { fieldId: f.fieldId, sourcePath: null, value: '13900000002', evidenceQuote: text, optionId: null }) });
-  app.local.profile = { family: [{ relation: '父亲', name: '张四' }, { relation: '母亲', name: '李五' }], supplementText: text };
+test('旧 JSON 画像在首次启动时改写为文本，不丢失已有内容', async () => {
+  const app = await setup({ local: { profile: { name: '张三', city: '杭州', family: [{ relation: '母亲', name: '李五' }], supplementText: '母亲电话为13900000002。', extraInfo: [{ label: '驾驶证', value: 'C1' }] } } });
   try {
-    await app.form.setContent('<fieldset><legend>家庭信息</legend><label>关系<select><option selected>母亲</option></select></label><label>姓名<input id="name"></label><label>电话<input id="phone"></label></fieldset>');
-    const popup = await app.openPopup(); await popup.locator('#btn-fill-model').click();
-    const job = await app.done(); assert.equal(job.result.filled, 2); assert.equal(job.result.preserved, 1);
-    assert.equal(await app.form.locator('#name').inputValue(), '李五'); assert.equal(await app.form.locator('#phone').inputValue(), '13900000002');
-    const payload = JSON.parse(app.requests[0].messages[1].content);
-    assert.equal(payload.supplementText, text); assert.equal(payload.fields[0].existingContext[0].value, '母亲');
-    assert.equal(JSON.stringify(app.session).includes(text), false);
+    await app.send({ type: 'GET_FILL_JOB' });
+    assert.equal(app.local.profile, undefined);
+    assert.match(app.local.userText, /母亲电话为13900000002。/);
+    assert.match(app.local.userText, /驾驶证：C1/);
+    assert.match(app.local.userText, /"name": "张三"/);
+    assert.match(app.local.userText, /"relation": "母亲"/);
   } finally { await app.close(); }
 });
 
-test('纯文本资料也能填写，无需先建立 JSON 固定字段', async () => {
+test('按失败原因自动修正：第一轮选项错误，第二轮带原因重问后填上', async () => {
   const text = '我叫张三，联系号码是13800138000。';
-  const app = await setup({ modelReply: payload => payload.fields.map(f => ({ fieldId: f.fieldId, value: f.label === '姓名' ? '张三' : '13800138000', evidenceQuote: text, optionId: null })) });
-  app.local.profile = { supplementText: text };
+  const app = await setup({ modelReply: (payload, current) => {
+    if (!payload.feedback) return { assignments: [fillItem(payload.fields[0].fieldId, '13900000000', current), fillItem(payload.fields[1].fieldId, '13800138000', current)] };
+    assert.equal(payload.feedback.length, 1);
+    assert.equal(payload.feedback[0].code, 'evidence_mismatch');
+    assert.equal(payload.feedback[0].previousValue, '13900000000');
+    return { assignments: [fillItem(payload.feedback[0].fieldId, '张三', '我叫张三')] };
+  } });
   try {
+    await app.form.setContent('<p><label>姓名<input id="name"></label></p><p><label>常用联络号码<input id="contact"></label></p>');
     const popup = await app.openPopup(); await popup.locator('#btn-fill-model').click();
-    const job = await app.done(); assert.equal(job.result.filled, 2); assert.equal(await app.form.locator('#name').inputValue(), '张三');
+    const job = await app.done();
+    assert.equal(app.requests.length, 2);
+    assert.equal(job.result.repaired, 1);
+    assert.equal(job.result.filled, 2);
+    assert.equal(job.result.unresolved, 0);
+    assert.equal(await app.form.locator('#name').inputValue(), '张三');
+    assert.ok(JSON.parse(app.requests[1].messages[1].content).feedback);
   } finally { await app.close(); }
 });
 
-test('模型生成的号码没有原文依据时不写入任何字段', async () => {
-  const app = await setup({ modelReply: payload => payload.fields.map(f => ({ fieldId: f.fieldId, value: '99999999999', evidenceQuote: '没有这段原文', optionId: null })) });
-  app.local.profile.supplementText = '真实号码是13800138000。';
+test('一个字段的问题不再作废其他字段：其余字段照常填写并列出原因', async () => {
+  const app = await setup({ modelReply: payload => ({ assignments: [
+    fillItem(payload.fields[0].fieldId, '99999999999', '没有这段原文'),
+    ...(payload.fields[1] ? [fillItem(payload.fields[1].fieldId, '13800138000', '联系号码是13800138000。')] : []),
+  ] }) });
   try {
     const popup = await app.openPopup(); await popup.locator('#btn-fill-model').click();
-    const job = await app.done(); assert.equal(job.status, 'error'); assert.equal(job.result.filled, 0); assert.match(job.result.error, /依据/);
+    const job = await app.done();
+    assert.equal(job.status, 'done');
+    assert.equal(job.result.filled, 1);
+    assert.equal(job.result.unresolved, 1);
+    assert.equal(job.result.issues.length, 1);
+    assert.equal(job.result.issues[0].label, '姓名');
     assert.equal(await app.form.locator('#name').inputValue(), '');
+    await popup.waitForFunction(() => document.getElementById('fill-result').textContent.includes('待处理 1 项'));
+    assert.match(await popup.locator('#fill-result').textContent(), /姓名：/);
+  } finally { await app.close(); }
+});
+
+test('模型说明缺少什么资料时提示用户补充', async () => {
+  const app = await setup({ modelReply: payload => ({ assignments: [
+    { fieldId: payload.fields[0].fieldId, value: null, evidenceQuote: null, optionId: null, transform: 'original', fillNone: false, note: '缺少紧急联系人电话' },
+    { fieldId: payload.fields[1].fieldId, value: null, evidenceQuote: null, optionId: null, transform: 'original', fillNone: false, note: '' },
+  ] }) });
+  try {
+    const popup = await app.openPopup(); await popup.locator('#btn-fill-model').click();
+    const job = await app.done();
+    assert.deepEqual(job.result.notes, ['缺少紧急联系人电话']);
+    assert.equal(job.result.unresolved, 2);
+    await popup.waitForFunction(() => document.getElementById('fill-result').textContent.includes('需你补充'));
+  } finally { await app.close(); }
+});
+
+test('扫描阶段跳过的字段按名称列出，便于手动处理', async () => {
+  const app = await setup({ modelReply: () => ({ assignments: [], rejected: [] }) });
+  try {
+    await app.form.setContent('<p><label>姓名<input id="name"></label></p><p><label>简历附件<input id="file" type="file"></label></p><p><label>图形验证码<input id="code"></label></p>');
+    const popup = await app.openPopup(); await popup.locator('#btn-fill-model').click();
+    const job = await app.done();
+    assert.equal(job.result.file, 1);
+    assert.equal(job.result.captcha, 1);
+    const labels = job.result.manual.map(item => item.label);
+    assert.ok(labels.includes('简历附件'));
+    assert.ok(labels.includes('图形验证码'));
+    await popup.waitForFunction(() => document.getElementById('fill-result').textContent.includes('需手动处理'));
   } finally { await app.close(); }
 });
 
@@ -259,7 +305,7 @@ test('重复点击只补空白项，显式关闭保护仍可覆盖旧值', async
   } finally { await app.close(); }
 });
 
-test('没有Key和API失败都不会预填网页，设置界面仍可保存Key', async () => {
+test('没有 Key 或 API 失败都不会预填网页，设置界面仍可保存 Key', async () => {
   const app = await setup({ configured: false });
   try {
     const popup = await app.openPopup(); await popup.locator('#btn-fill-model').click();
@@ -273,75 +319,39 @@ test('没有Key和API失败都不会预填网页，设置界面仍可保存Key',
   finally { await failing.close(); }
 });
 
-test('清空补充文本不复活旧额外信息，超长文本不覆盖已有资料', async () => {
-  const app = await setup(); app.local.profile.extraInfo = [{ label: '驾驶证', value: 'C1' }];
+test('资料为空或超长时不启动填写，悬浮入口不泄露资料内容', async () => {
+  const app = await setup({ local: { userText: '   ' } });
   try {
-    const before = structuredClone(app.local.profile);
-    assert.equal((await app.send({ type: 'SAVE_SUPPLEMENT_TEXT', text: 'x'.repeat(30001) })).ok, false);
-    assert.deepEqual(app.local.profile, before);
-    const popup = await app.openPopup(); await popup.locator('#btn-add-profile').click();
-    await popup.locator('#supplement-text').fill(''); await popup.locator('#btn-save-profile').click();
-    await popup.waitForFunction(() => document.getElementById('profile-save-result').textContent.includes('已保存'));
-    assert.equal(app.local.profile.supplementText, '');
-    await popup.locator('#btn-fill-model').click(); await app.done();
-    assert.equal(JSON.parse(app.requests[0].messages[1].content).sourcePaths.includes('extraInfo.0.value'), false);
+    const response = await app.send({ type: 'START_FILL', tabId: 7 });
+    assert.equal(response.ok, false); assert.match(response.error, /资料/);
+    assert.equal(app.requests.length, 0);
+    const sender = { id: 'test', tab: { id: 7 }, frameId: 0, url: 'https://jobs.example/apply' };
+    const state = await app.send({ type: 'FLOATING_GET_STATUS' }, sender);
+    assert.equal(state.hasText, false); assert.equal(state.textLength, 0);
+    assert.equal((await app.send({ type: 'SAVE_USER_TEXT', text: 'x'.repeat(30001) })).ok, false);
+    assert.equal((await app.send({ type: 'SAVE_USER_TEXT', text: 'malicious' }, sender)).ok, false);
+    await app.send({ type: 'SAVE_USER_TEXT', text: DEFAULT_TEXT });
+    assert.equal(app.local.userText, DEFAULT_TEXT);
+    const filled = await app.send({ type: 'FLOATING_GET_STATUS' }, sender);
+    assert.equal(filled.hasText, true); assert.equal(filled.textLength, DEFAULT_TEXT.length);
+    assert.equal(JSON.stringify(filled).includes('张三'), false);
   } finally { await app.close(); }
 });
 
-test('悬浮球只有模型按钮、固定在右下角且消息不能泄露资料或修改其他页', async () => {
+test('悬浮球只有模型按钮、固定在右下角且不能修改其他页', async () => {
   const app = await setup();
   try {
     await app.form.addStyleTag({ content: 'body{min-height:2500px}' }); await app.mountFloating(); await app.floatClick('.ball');
     assert.equal(await app.form.evaluate(() => window.__floatShadow.querySelectorAll('.fill').length), 1);
-    const rect = () => app.form.evaluate(() => { const r=window.__floatShadow.querySelector('.ball').getBoundingClientRect(); return { x:r.x,y:r.y }; });
-    const before = await rect(); await app.form.evaluate(() => scrollTo(0,1000)); assert.deepEqual(await rect(), before);
-    await app.form.mouse.click(100,100); assert.equal(await app.form.evaluate(() => window.__floatShadow.querySelector('.panel').hidden), false);
-    const sender = { id:'test', tab:{id:7}, frameId:0, url:'https://jobs.example/apply' };
-    const status = await app.send({type:'FLOATING_GET_STATUS'}, sender);
+    const rect = () => app.form.evaluate(() => { const r = window.__floatShadow.querySelector('.ball').getBoundingClientRect(); return { x: r.x, y: r.y }; });
+    const before = await rect(); await app.form.evaluate(() => scrollTo(0, 1000)); assert.deepEqual(await rect(), before);
+    await app.form.mouse.click(100, 100); assert.equal(await app.form.evaluate(() => window.__floatShadow.querySelector('.panel').hidden), false);
+    const sender = { id: 'test', tab: { id: 7 }, frameId: 0, url: 'https://jobs.example/apply' };
+    const status = await app.send({ type: 'FLOATING_GET_STATUS' }, sender);
     assert.equal(JSON.stringify(status).includes('13800138000'), false);
-    assert.equal((await app.send({type:'SAVE_SUPPLEMENT_TEXT',text:'malicious'},sender)).ok,false);
-    await app.send({type:'FLOATING_START_FILL',tabId:999,allowOverwrite:true},sender);
-    assert.equal((await app.done()).tabId,7);
+    await app.send({ type: 'FLOATING_START_FILL', tabId: 999, allowOverwrite: true }, sender);
+    assert.equal((await app.done()).tabId, 7);
     await app.form.waitForFunction(() => !window.__floatShadow.querySelector('.model').disabled);
-    await app.form.screenshot({path:path.join(root,'.test-artifacts/model-floating.png')});
-  } finally { await app.close(); }
-});
-
-test('仅有旧补充且新文本已清空时，不会启动模型或显示就绪', async () => {
-  const app = await setup();
-  app.local.profile = { extraInfo: [{ label: '驾驶证', value: 'C1' }], supplementText: '' };
-  try {
-    const response = await app.send({ type: 'START_FILL', tabId: 7 });
-    assert.equal(response.ok, false); assert.match(response.error, /保存/);
-    assert.equal(app.requests.length, 0);
-    const state = await app.send({ type: 'FLOATING_GET_STATUS' }, { id:'test', tab:{id:7}, frameId:0, url:'https://jobs.example/apply' });
-    assert.equal(state.profileReady, false); assert.equal(state.fieldCount, 0);
-  } finally { await app.close(); }
-});
-
-test('完整编辑先打开、主页后来新增文本，保存和导出仍保留最新补充', async () => {
-  const app = await setup();
-  try {
-    const editor = await app.openEditor();
-    await app.send({ type:'SAVE_SUPPLEMENT_TEXT', text:'后来新增的母亲电话是13900000002。' });
-    await editor.locator('[data-key="city"]').fill('杭州'); await editor.locator('#btn-save').click();
-    await editor.waitForFunction(() => document.getElementById('save-toast').textContent === '画像已保存');
-    assert.equal(app.local.profile.supplementText, '后来新增的母亲电话是13900000002。');
-    await app.send({ type:'SAVE_SUPPLEMENT_TEXT', text:'导出前更新为新文本。' });
-    await editor.locator('#btn-export-json').click(); await editor.locator('#dlg-export').waitFor({state:'visible'});
-    assert.equal(JSON.parse(await editor.locator('#export-area').inputValue()).supplementText, '导出前更新为新文本。');
-  } finally { await app.close(); }
-});
-
-test('并发保存 JSON 和文本通过后台合并，显式 JSON 替换仍可恢复备份', async () => {
-  const app = await setup();
-  try {
-    await Promise.all([
-      app.send({ type:'SAVE_SUPPLEMENT_TEXT', text:'新的补充文本' }),
-      app.send({ type:'SAVE_JSON_PROFILE', profile:{ name:'张三', city:'杭州' } }),
-    ]);
-    assert.equal(app.local.profile.city, '杭州'); assert.equal(app.local.profile.supplementText, '新的补充文本');
-    await app.send({ type:'SAVE_JSON_PROFILE', replaceProfile:true, profile:{ name:'备份姓名', supplementText:'备份文本' } });
-    assert.deepEqual(app.local.profile, { name:'备份姓名', supplementText:'备份文本' });
+    await app.form.screenshot({ path: path.join(root, '.test-artifacts/model-floating.png') });
   } finally { await app.close(); }
 });

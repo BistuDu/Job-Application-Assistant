@@ -26,35 +26,24 @@ function getActiveTab() {
   if (Number.isInteger(targetTabId) && targetTabId > 0) return send({ type: 'GET_TARGET_TAB', tabId: targetTabId }).then(response => response.tab).catch(() => null);
   return new Promise((res) => chrome.tabs.query({ active: true, currentWindow: true }, (t) => res(t && t[0])));
 }
-function countFields(p) {
-  if (!p) return 0;
-  let n = 0;
-  for (const k of Object.keys(p)) {
-    if (k === 'extraInfo' && Object.hasOwn(p, 'supplementText')) continue;
-    const v = p[k];
-    if (v === undefined || v === null || typeof v === 'string' && !v.trim()) continue;
-    if (Array.isArray(v)) { n += k === "extraInfo" ? v.length : v.length ? 1 : 0; }
-    else n++;
-  }
-  return n;
+function textLength(userText) {
+  return typeof userText === 'string' ? userText.trim().length : 0;
 }
 
-/* ---------- 画像存取 ---------- */
-function loadProfile() {
-  return new Promise((res) => chrome.storage.local.get(['profile', 'syncedAt'], (d) => res(d)));
+/* ---------- 资料存取（只保存文本） ---------- */
+function loadUserData() {
+  return new Promise((res) => chrome.storage.local.get(['userText', 'syncedAt'], res));
 }
 async function renderStatus() {
-  const { profile, syncedAt } = await loadProfile();
-  if (profile && countFields(profile) > 0) {
-    const cnt = countFields(profile);
-    statusEl.innerHTML = `当前画像：<span class="name"></span>
-      <span class="ready">✓ 就绪</span>
-      <span class="field-count">(${cnt}字段)</span>
+  const { userText, syncedAt } = await loadUserData();
+  const length = textLength(userText);
+  if (length > 0) {
+    statusEl.innerHTML = `当前资料：<span class="ready">✓ 已保存</span>
+      <span class="field-count">(${length} 字)</span>
       <br><span style="font-size:11px;color:var(--muted)">更新于 ${fmtTime(syncedAt)}</span>`;
-    statusEl.querySelector('.name').textContent = profile.name || '已保存资料';
   } else {
-    statusEl.innerHTML = `<span style="color:var(--warn)">画像未填写</span><br>
-      <span style="font-size:11px">点「➕ 新增信息」保存自定义资料</span>`;
+    statusEl.innerHTML = `<span style="color:var(--warn)">资料未填写</span><br>
+      <span style="font-size:11px">点「✏️ 编辑资料」用文字描述你的真实信息</span>`;
   }
 }
 
@@ -69,8 +58,8 @@ let extraDirty = false;
 
 async function loadQuickProfile(force = false) {
   if (!force && extraDirty) return;
-  const { profile = {} } = await loadProfile();
-  $('supplement-text').value = Object.hasOwn(profile, 'supplementText') ? profile.supplementText || '' : (Array.isArray(profile.extraInfo) ? profile.extraInfo : []).map(item => `${item.label}：${item.value}`).join('\n');
+  const { userText } = await loadUserData();
+  $('supplement-text').value = typeof userText === 'string' ? userText : '';
   extraDirty = false;
 }
 
@@ -82,9 +71,9 @@ async function saveQuickProfile(event) {
   $('btn-save-profile').disabled = true;
   $('quick-profile-form').querySelectorAll('input,textarea,button').forEach(el => { el.disabled = true; });
   try {
-    await send({ type: 'SAVE_SUPPLEMENT_TEXT', text });
+    await send({ type: 'SAVE_USER_TEXT', text });
     await renderStatus(); await loadQuickProfile(true);
-    result.className = 'settings-result'; result.textContent = '用户信息已保存，后续填写会使用最新信息。';
+    result.className = 'settings-result'; result.textContent = '用户资料已保存，后续填写会使用最新信息。';
   } catch (error) { result.className = 'settings-result err'; result.textContent = error.message; }
   finally { $('quick-profile-form').querySelectorAll('input,textarea,button').forEach(el => { el.disabled = false; }); }
 }
@@ -113,17 +102,18 @@ function renderJob(job) {
   if (r.contextFields) parts.push(`结合页面已填信息判断 ${r.contextFields} 个空白字段`);
   if (running) parts.push(job.phase);
   parts.push(`已填 ${r.filled || 0} 项（DeepSeek ${r.modelFilled || 0}）`);
-  if (r.filledNone) parts.push(`其中填「无」 ${r.filledNone}`);
+  if (r.filledNone) parts.push(`其中填「无」 ${r.filledNone} 项`);
   if (r.preserved) parts.push(`已保留已有信息 ${r.preserved} 项`);
-  if (r.linkedProtected) parts.push(`联动字段需手动 ${r.linkedProtected}（保护已有子项）`);
-  if (r.unresolved) parts.push(`待处理 ${r.unresolved}`);
+  if (r.repaired) parts.push(`按失败原因自动修正 ${r.repaired} 项`);
+  else if (r.retried) parts.push(`已重试 ${r.retried} 项仍未填上`);
+  if (r.unresolved) parts.push(`待处理 ${r.unresolved} 项`);
+  if (r.issues?.length) parts.push(...r.issues.slice(0, 8).map(item => `· ${item.label}：${item.reason}`));
+  if (r.notes?.length) parts.push(`需你补充：${r.notes.join('；')}`);
   if (r.stale) parts.push(`页面或输入已变化 ${r.stale}（请重新填写）`);
-  if (r.captcha) parts.push(`验证码 ${r.captcha}（需手动）`);
-  if (r.file) parts.push(`上传 ${r.file}（需手动）`);
-  if (r.agreement) parts.push(`同意条款 ${r.agreement}（需手动）`);
-  if (r.unsupported) parts.push(`控件需手动 ${r.unsupported}`);
+  const manualCount = (r.captcha || 0) + (r.file || 0) + (r.agreement || 0) + (r.unsupported || 0) + (r.linkedProtected || 0);
+  if (manualCount) parts.push(`需手动处理 ${manualCount} 项`);
+  if (r.manual?.length) parts.push(...r.manual.slice(0, 5).map(item => `· ${item.label}：${item.reason}`));
   if (!running && job.status === 'error') parts.push(r.error || job.phase);
-  if (!running && r.pendingLabels?.length) parts.push(`待处理字段：${r.pendingLabels.join('、')}`);
   showResult(parts.join('\n'), job.status === 'error' ? 'err' : !running && ((!r.filled && !r.preserved) || r.unresolved || r.linkedProtected) ? 'warn' : '');
 }
 
@@ -169,10 +159,10 @@ async function fillCurrentPage() {
   setBusy(true);
   showResult('正在启动填写…');
   try {
-    const { profile } = await loadProfile();
-    if (!profile || countFields(profile) === 0) {
+    const { userText } = await loadUserData();
+    if (textLength(userText) === 0) {
       setBusy(false);
-      showResult('画像未填写，无法填写。请先在「完整编辑」保存资料，或添加补充文本。', 'warn');
+      showResult('资料未填写，无法填写。请先在「✏️ 编辑资料」中用文字描述你的信息。', 'warn');
       return;
     }
     const tab = await getActiveTab();
@@ -186,7 +176,7 @@ async function fillCurrentPage() {
   } catch (e) {
     setBusy(false);
     showResult('填写失败：' + (e.message || e), 'err');
-    if (/API Key/.test(e.message || '')) $('deepseek-settings').open = true;
+    if (/API Key/.test(e.message || e)) $('deepseek-settings').open = true;
   }
 }
 
@@ -221,9 +211,9 @@ async function fillCurrentPage() {
     chrome.storage.local.set({ fillNoneWhenEmpty: noneChk.checked });
   });
 
-  // 画像变更时刷新状态
+  // 资料变更时刷新状态
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.profile) {
+    if (area === 'local' && changes.userText) {
       renderStatus();
       if (!extraDirty) loadQuickProfile();
     }
