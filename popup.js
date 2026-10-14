@@ -1,9 +1,8 @@
-/* 职聘通·网申助手 — 两种填写模式，后台执行 DeepSeek 请求。 */
+/* 职聘通·网申助手 — 纯模型填写，后台执行 DeepSeek 请求。 */
 
 /* ---------- DOM ---------- */
 const $ = (id) => document.getElementById(id);
 const statusEl = $('profile-status');
-const hybridBtn = $('btn-fill-hybrid');
 const modelBtn = $('btn-fill-model');
 const editBtn = $('btn-edit');
 const resultEl = $('fill-result');
@@ -31,8 +30,9 @@ function countFields(p) {
   if (!p) return 0;
   let n = 0;
   for (const k of Object.keys(p)) {
+    if (k === 'extraInfo' && Object.hasOwn(p, 'supplementText')) continue;
     const v = p[k];
-    if (v === undefined || v === null || v === '') continue;
+    if (v === undefined || v === null || typeof v === 'string' && !v.trim()) continue;
     if (Array.isArray(v)) { n += k === "extraInfo" ? v.length : v.length ? 1 : 0; }
     else n++;
   }
@@ -51,7 +51,7 @@ async function renderStatus() {
       <span class="ready">✓ 就绪</span>
       <span class="field-count">(${cnt}字段)</span>
       <br><span style="font-size:11px;color:var(--muted)">更新于 ${fmtTime(syncedAt)}</span>`;
-    statusEl.querySelector('.name').textContent = profile.name || '自定义资料';
+    statusEl.querySelector('.name').textContent = profile.name || '已保存资料';
   } else {
     statusEl.innerHTML = `<span style="color:var(--warn)">画像未填写</span><br>
       <span style="font-size:11px">点「➕ 新增信息」保存自定义资料</span>`;
@@ -67,53 +67,22 @@ async function openEditor() {
 /* ---------- 主页直接补充信息 ---------- */
 let extraDirty = false;
 
-function addExtraRow(item = {}) {
-  const row = document.createElement('div');
-  row.className = 'extra-info-row';
-  const nameLabel = document.createElement('label');
-  nameLabel.textContent = '信息名称';
-  const name = document.createElement('input');
-  name.dataset.extraLabel = '';
-  name.placeholder = '填写你需要保存的信息名称';
-  name.maxLength = 120;
-  name.value = item.label || '';
-  nameLabel.appendChild(name);
-  const valueLabel = document.createElement('label');
-  valueLabel.textContent = '信息内容';
-  const value = document.createElement('textarea');
-  value.dataset.extraValue = '';
-  value.rows = 2;
-  value.maxLength = 10000;
-  value.placeholder = '填写真实内容';
-  value.value = item.value || '';
-  valueLabel.appendChild(value);
-  const remove = document.createElement('button');
-  remove.type = 'button'; remove.className = 'btn ghost sm'; remove.textContent = '删除此条';
-  remove.addEventListener('click', () => { row.remove(); extraDirty = true; });
-  row.addEventListener('input', () => { extraDirty = true; });
-  row.append(nameLabel, valueLabel, remove);
-  $('extra-info-rows').appendChild(row);
-  return name;
-}
-
 async function loadQuickProfile(force = false) {
-  const { profile = {} } = await loadProfile();
   if (!force && extraDirty) return;
-  $('extra-info-rows').replaceChildren();
-  (Array.isArray(profile.extraInfo) ? profile.extraInfo : []).forEach(addExtraRow);
-  if (!$('extra-info-rows').children.length) addExtraRow();
+  const { profile = {} } = await loadProfile();
+  $('supplement-text').value = Object.hasOwn(profile, 'supplementText') ? profile.supplementText || '' : (Array.isArray(profile.extraInfo) ? profile.extraInfo : []).map(item => `${item.label}：${item.value}`).join('\n');
   extraDirty = false;
 }
 
 async function saveQuickProfile(event) {
   event.preventDefault();
   const result = $('profile-save-result');
-  const extraInfo = Array.from(document.querySelectorAll('.extra-info-row')).map(row => ({ label: row.querySelector('[data-extra-label]').value, value: row.querySelector('[data-extra-value]').value }));
+  const text = $('supplement-text').value;
   if (!extraDirty) { result.textContent = '没有新的修改。'; return; }
   $('btn-save-profile').disabled = true;
   $('quick-profile-form').querySelectorAll('input,textarea,button').forEach(el => { el.disabled = true; });
   try {
-    await send({ type: 'SAVE_QUICK_PROFILE', extraInfo });
+    await send({ type: 'SAVE_SUPPLEMENT_TEXT', text });
     await renderStatus(); await loadQuickProfile(true);
     result.className = 'settings-result'; result.textContent = '用户信息已保存，后续填写会使用最新信息。';
   } catch (error) { result.className = 'settings-result err'; result.textContent = error.message; }
@@ -132,7 +101,7 @@ async function send(message) {
 
 function setBusy(value) {
   busy = value;
-  for (const el of [hybridBtn, modelBtn, noneChk, protectChk, $('btn-save-deepseek'), $('btn-clear-deepseek')]) el.disabled = value;
+  for (const el of [modelBtn, noneChk, protectChk, $('btn-save-deepseek'), $('btn-clear-deepseek')]) el.disabled = value;
 }
 
 function renderJob(job) {
@@ -140,10 +109,10 @@ function renderJob(job) {
   const running = job.status === 'running';
   setBusy(running);
   const r = job.result || {};
-  const parts = [`${job.mode === 'hybrid' ? '模式1：规则+模型' : '模式2：模型'}`];
+  const parts = ['DeepSeek 智能填写'];
   if (r.contextFields) parts.push(`结合页面已填信息判断 ${r.contextFields} 个空白字段`);
   if (running) parts.push(job.phase);
-  parts.push(`已填 ${r.filled || 0} 项（规则 ${r.ruleFilled || 0} · DeepSeek ${r.modelFilled || 0}）`);
+  parts.push(`已填 ${r.filled || 0} 项（DeepSeek ${r.modelFilled || 0}）`);
   if (r.filledNone) parts.push(`其中填「无」 ${r.filledNone}`);
   if (r.preserved) parts.push(`已保留已有信息 ${r.preserved} 项`);
   if (r.linkedProtected) parts.push(`联动字段需手动 ${r.linkedProtected}（保护已有子项）`);
@@ -182,7 +151,7 @@ async function saveSettings(event) {
     await send({ type: 'SAVE_DEEPSEEK_SETTINGS', apiKey: $('deepseek-key').value, model: $('deepseek-model').value });
     await loadSettings();
     result.className = 'settings-result';
-    result.textContent = '配置已保存，可以使用两种填写模式。';
+    result.textContent = '配置已保存，可以使用纯模型填写。';
   } catch (error) { result.className = 'settings-result err'; result.textContent = error.message; }
 }
 
@@ -195,7 +164,7 @@ async function clearSettings() {
   } catch (error) { showResult(error.message, 'err'); }
 }
 
-async function fillCurrentPage(mode) {
+async function fillCurrentPage() {
   if (busy) return;
   setBusy(true);
   showResult('正在启动填写…');
@@ -203,7 +172,7 @@ async function fillCurrentPage(mode) {
     const { profile } = await loadProfile();
     if (!profile || countFields(profile) === 0) {
       setBusy(false);
-      showResult('画像未填写，无法填写。请先点「➕ 新增信息」。', 'warn');
+      showResult('画像未填写，无法填写。请先在「完整编辑」保存资料，或添加补充文本。', 'warn');
       return;
     }
     const tab = await getActiveTab();
@@ -212,7 +181,7 @@ async function fillCurrentPage(mode) {
       showResult('请先打开一个企业投递页面', 'warn');
       return;
     }
-    await send({ type: 'START_FILL', mode, tabId: tab.id, fillNoneWhenEmpty: noneChk.checked, allowOverwrite: !protectChk.checked });
+    await send({ type: 'START_FILL', tabId: tab.id, fillNoneWhenEmpty: noneChk.checked, allowOverwrite: !protectChk.checked });
     await refreshJob();
   } catch (e) {
     setBusy(false);
@@ -224,12 +193,11 @@ async function fillCurrentPage(mode) {
 /* ---------- 初始化 ---------- */
 (async function init() {
   await renderStatus();
-  hybridBtn.addEventListener('click', () => fillCurrentPage('hybrid'));
-  modelBtn.addEventListener('click', () => fillCurrentPage('model'));
+  modelBtn.addEventListener('click', fillCurrentPage);
   editBtn.addEventListener('click', openEditor);
-  $('btn-add-profile').addEventListener('click', () => { $('quick-profile').open = true; document.querySelector('[data-extra-label]')?.focus(); });
+  $('btn-add-profile').addEventListener('click', () => { $('quick-profile').open = true; $('supplement-text').focus(); });
   $('quick-profile-form').addEventListener('submit', saveQuickProfile);
-  $('btn-add-extra').addEventListener('click', () => { extraDirty = true; addExtraRow().focus(); });
+  $('supplement-text').addEventListener('input', () => { extraDirty = true; });
   $('btn-open-home').addEventListener('click', async () => {
     try { const tab = await getActiveTab(); await send({ type: 'OPEN_HOME', tabId: tab?.id }); } catch (error) { showResult(error.message, 'err'); }
   });

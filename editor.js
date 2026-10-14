@@ -31,12 +31,10 @@ function showToast(msg, kind) {
 function getStorage() {
   return new Promise(res => chrome.storage.local.get([STORAGE_KEY, SYNC_KEY], res));
 }
-function setStorage(data) {
-  return new Promise(res => chrome.storage.local.set(data, res));
-}
 /* ========== 画像加载 ========== */
 let currentProfile = {};
 let isDirty = false;
+let profileWasReplaced = false;
 
 async function loadProfile() {
   const { profile, syncedAt } = await getStorage();
@@ -177,6 +175,7 @@ function collectProfile() {
   const p = {};
   // 主页新增的额外信息不在旧编辑器的固定字段中，保存/导出时保留。
   if (Array.isArray(currentProfile.extraInfo)) p.extraInfo = currentProfile.extraInfo;
+  if (typeof currentProfile.supplementText === 'string') p.supplementText = currentProfile.supplementText;
 
   // 简单字段
   $$('[data-key]').forEach(el => {
@@ -228,8 +227,12 @@ function collectProfile() {
 /* ========== 保存 ========== */
 async function saveProfile() {
   const p = collectProfile();
-  await setStorage({ [STORAGE_KEY]: p, [SYNC_KEY]: Date.now() });
-  currentProfile = p;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'SAVE_JSON_PROFILE', profile: p, replaceProfile: profileWasReplaced });
+    if (!result?.ok) throw new Error(result?.error || '保存失败，请重新加载扩展');
+    currentProfile = result.profile;
+  } catch (error) { showToast(error.message, 'err'); return; }
+  profileWasReplaced = false;
   isDirty = false;
   updateSaveStatus(false);
   showToast('画像已保存', 'ok');
@@ -257,6 +260,7 @@ function doImport() {
     if (!raw) { showToast('请粘贴 JSON 文本', 'warn'); return; }
     const p = JSON.parse(raw);
     currentProfile = p;
+    profileWasReplaced = true;
     renderForm(p);
     isDirty = true;
     updateSaveStatus(true);
@@ -266,8 +270,18 @@ function doImport() {
     showToast('JSON 解析失败：' + (e.message || e), 'err');
   }
 }
-function openExportDialog() {
+async function collectExportProfile() {
   const p = collectProfile();
+  if (!profileWasReplaced) {
+    const { profile: latest = {} } = await getStorage();
+    if (Object.hasOwn(latest, 'supplementText')) p.supplementText = latest.supplementText;
+    else delete p.supplementText;
+    if (Array.isArray(latest.extraInfo)) p.extraInfo = latest.extraInfo;
+  }
+  return p;
+}
+async function openExportDialog() {
+  const p = await collectExportProfile();
   const json = JSON.stringify(p, null, 2);
   $('#export-area').value = json;
   $('#dlg-export').showModal();
@@ -276,8 +290,8 @@ function copyJSON() {
   const text = $('#export-area').value;
   navigator.clipboard.writeText(text).then(() => showToast('已复制到剪贴板', 'ok'));
 }
-function downloadJSON() {
-  const p = collectProfile();
+async function downloadJSON() {
+  const p = await collectExportProfile();
   const blob = new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -292,6 +306,7 @@ function downloadJSON() {
 function resetProfile() {
   if (!confirm('确定清空所有画像数据？此操作不可撤销。')) return;
   currentProfile = {};
+  profileWasReplaced = true;
   renderForm({});
   isDirty = true;
   updateSaveStatus(true);
@@ -374,6 +389,7 @@ async function loadExample() {
     const example = await resp.json();
     delete example._comment;
     currentProfile = example;
+    profileWasReplaced = true;
     renderForm(example);
     isDirty = true;
     updateSaveStatus(true);

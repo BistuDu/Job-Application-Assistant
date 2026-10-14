@@ -10,7 +10,7 @@
 <div class="wrap">
   <header>
     <div class="logo"><span class="dot">📋</span>网申助手</div>
-    <div class="header-actions"><button id="btn-open-home" class="btn ghost sm">固定窗口</button><div class="ver">v2.11.1</div></div>
+    <div class="header-actions"><button id="btn-open-home" class="btn ghost sm">固定窗口</button><div class="ver">v3.0</div></div>
   </header>
 
   <div class="card" id="profile-card">
@@ -25,22 +25,18 @@
   <details id="quick-profile" class="settings card">
     <summary>新增 / 补充用户信息</summary>
     <form id="quick-profile-form">
-      <div id="extra-info-rows"></div>
-      <button id="btn-add-extra" class="btn ghost sm" type="button">＋ 添加一条信息</button>
-      <p class="settings-note">由你定义信息名称和真实内容，可随时添加、修改或删除。</p>
+      <label for="supplement-text">补充资料（直接描述）</label>
+      <textarea id="supplement-text" rows="6" maxlength="30000" placeholder="直接粘贴简历片段或用文字补充真实信息，说明属于谁、哪段经历即可。无需填写 JSON 或逐条定义字段。"></textarea>
+      <p class="settings-note">已有 JSON 资料仍由「完整编辑」维护；模型会结合补充文本直接提取内容。保存空文本可清除补充信息。</p>
       <button id="btn-save-profile" class="btn primary sm" type="submit">保存用户信息</button>
       <p id="profile-save-result" class="settings-result" role="status"></p>
     </form>
   </details>
 
   <div class="fill-actions">
-    <button id="btn-fill-hybrid" class="btn primary lg fill-btn" aria-label="一键填写本页（模式1:规则+模型）">
+    <button id="btn-fill-model" class="btn primary lg fill-btn" aria-label="一键填写本页">
       <span class="fill-title">⚡ 一键填写本页</span>
-      <span class="fill-mode">（模式1:规则+模型）</span>
-    </button>
-    <button id="btn-fill-model" class="btn primary lg fill-btn" aria-label="一键填写本页（模式2:模型）">
-      <span class="fill-title">⚡ 一键填写本页</span>
-      <span class="fill-mode">（模式2:模型）</span>
+      <span class="fill-mode">（DeepSeek 智能填写）</span>
     </button>
   </div>
   <label class="opt-row" title="默认只填写空白字段。关闭后允许覆盖已有内容；每次重新打开主页都会恢复保护。">
@@ -51,7 +47,7 @@
     <input type="checkbox" id="opt-fill-none" checked>
     <span>空缺项自动填「无」（没有的经历/证书不用手填）</span>
   </label>
-  <p class="model-note">自动参考网申页面同区域已填内容，判断空白项应使用哪些资料。字段描述、已有内容和所需画像会发送至 DeepSeek。</p>
+  <p class="model-note">自动参考网申页面同区域已填内容，判断空白项应使用哪些资料。字段描述、已有内容、JSON 资料及补充文本会发送至 DeepSeek。</p>
   <label class="opt-row">
     <input type="checkbox" id="opt-floating" checked>
     <span>网页右下角显示悬浮球</span>
@@ -86,12 +82,12 @@
         <li>点<b>「完整编辑」</b>填写并保存主要资料；额外信息通过<b>「新增信息」</b>补充。</li>
         <li>打开任意企业官网的投递/网申页面。</li>
         <li>在本扩展的 <b>DeepSeek 设置</b>中保存你的 API Key。</li>
-        <li>选择<b>模式1</b>先规则填写再模型补充，或<b>模式2</b>直接用模型判断。</li>
+        <li>点击<b>「一键填写本页」</b>，由 DeepSeek 判断并填写。</li>
         <li>默认保护已有内容，再次点击只补空白；也可使用网页右下角的悬浮入口。</li>
       </ol>
     </div>
     <div class="usage-note">💡 验证码、简历上传、同意条款等需按页面手动处理。</div>
-    <p class="privacy">🔒 画像和 Key 保存在本机。使用模型时，字段描述、同区域已有内容和画像内容会发送至 DeepSeek；验证码、上传和同意条款仍需手动处理。</p>
+    <p class="privacy">🔒 画像和 Key 保存在本机。使用模型时，字段描述、同区域已有内容、JSON 资料及补充文本会发送至 DeepSeek；验证码、上传和同意条款仍需手动处理。</p>
   </details>
 </div>
 <script src="popup.js"></script>

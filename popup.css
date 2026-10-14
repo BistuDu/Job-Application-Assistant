@@ -59,9 +59,7 @@ header {
 }
 .header-actions { display: flex; align-items: center; gap: 6px; }
 .header-actions .btn { font-size: 11px; padding: 4px 7px; }
-.extra-info-row { border-top: 1px solid var(--border); padding-top: 6px; margin: 10px 0; }
 .settings textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; font: inherit; resize: vertical; }
-.extra-info-row .btn { margin-top: 5px; }
 #btn-save-profile { margin-top: 8px; }
 
 /* ---- 卡片（毛玻璃） ---- */
@@ -187,3 +185,5 @@ header {
   accent-color: #7342E2; width: 14px; height: 14px; cursor: pointer; flex-shrink: 0;
 }
 .opt-row span { line-height: 1.4; }
+
+#supplement-text { min-height: 150px; line-height: 1.7; background: white; color: var(--text); }

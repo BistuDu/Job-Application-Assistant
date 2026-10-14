@@ -31,9 +31,8 @@
   panel.className = 'panel'; panel.hidden = true; panel.setAttribute('aria-label', '网申助手填写面板');
   panel.innerHTML = `<header><span>📋 网申助手</span><button class="close" aria-label="收起面板">×</button></header>
     <p class="profile"></p>
-    <button class="fill hybrid" aria-label="一键填写本页（模式1:规则+模型）">⚡ 一键填写本页<span>模式1:规则+模型</span></button>
-    <button class="fill model" aria-label="一键填写本页（模式2:模型）">⚡ 一键填写本页<span>模式2:模型</span></button>
-    <p class="note">默认保护已有信息，仅补空白项。</p><p class="note">模型参考同区域已填内容；字段描述、已有内容和所需画像会发送至 DeepSeek。</p>
+    <button class="fill model" aria-label="一键填写本页">⚡ 一键填写本页<span>DeepSeek 智能填写</span></button>
+    <p class="note">默认保护已有信息，仅补空白项。</p><p class="note">模型参考同区域已填内容；字段描述、已有内容、JSON 资料及补充文本会发送至 DeepSeek。</p>
     <div class="status" role="status" aria-live="polite"></div>
     <button class="home">新增信息 / 打开固定主页</button>`;
   shadow.appendChild(panel);
@@ -75,7 +74,7 @@
       disable(state.busy);
       if (state.job) {
         const job = state.job, r = job.result || {};
-        const lines = [job.status === 'running' ? job.phase : job.status === 'error' ? r.error || job.phase : '填写完成', `已填 ${r.filled || 0} 项（规则 ${r.ruleFilled || 0} · DeepSeek ${r.modelFilled || 0}）`];
+        const lines = [job.status === 'running' ? job.phase : job.status === 'error' ? r.error || job.phase : '填写完成', `已填 ${r.filled || 0} 项（DeepSeek ${r.modelFilled || 0}）`];
         if (r.contextFields) lines.push(`结合页面已填信息判断 ${r.contextFields} 个空白字段`);
         if (r.preserved) lines.push(`已保留已有信息 ${r.preserved} 项`);
         if (r.unresolved) lines.push(`待处理 ${r.unresolved} 项`);
@@ -86,10 +85,10 @@
       else show(state.configured ? '' : 'DeepSeek 尚未配置，可打开主页保存 API Key。');
     } catch (error) { disable(false); show(error.message, true); }
   }
-  async function start(mode) {
+  async function start() {
     if (busy || starting) return;
     starting = true; disable(true); show('正在启动填写…');
-    try { await send({ type: 'FLOATING_START_FILL', mode }); }
+    try { await send({ type: 'FLOATING_START_FILL' }); }
     catch (error) { show(error.message, true); disable(false); return; }
     finally { starting = false; }
     await refresh();
@@ -102,8 +101,7 @@
   });
   panel.querySelector('.close').addEventListener('click', close);
   panel.addEventListener('keydown', event => { if (event.key === 'Escape') { close(); ball.focus(); } });
-  panel.querySelector('.hybrid').addEventListener('click', () => start('hybrid'));
-  panel.querySelector('.model').addEventListener('click', () => start('model'));
+  panel.querySelector('.model').addEventListener('click', start);
   panel.querySelector('.home').addEventListener('click', async () => {
     try { await send({ type: 'FLOATING_OPEN_HOME' }); } catch (error) { show(error.message, true); }
   });

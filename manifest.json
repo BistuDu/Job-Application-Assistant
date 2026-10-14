@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "职聘通·网申助手",
-  "version": "2.11.1",
+  "version": "3.0.0",
   "minimum_chrome_version": "110",
-  "description": "网申自动填写，支持规则+DeepSeek与纯DeepSeek两种模式。画像本地保存，使用模型时将字段描述和画像发送至DeepSeek。",
+  "description": "网申自动填写，由DeepSeek结合已有JSON资料、补充文本及网页上下文智能填写。资料本地保存，调用模型时发送相关内容至DeepSeek。",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "content_scripts": [{

@@ -1,6 +1,17 @@
 importScripts('fill-engine.js', 'deepseek-client.js', 'fill-controller.js');
 
 let activeJob = null;
+let profileWrites = Promise.resolve();
+function saveProfileUpdate(update) {
+  const operation = profileWrites.then(async () => {
+    const { profile } = await chrome.storage.local.get('profile');
+    const updated = update(profile || {});
+    await chrome.storage.local.set({ profile: updated, syncedAt: Date.now() });
+    return { saved: true, profile: updated };
+  });
+  profileWrites = operation.catch(() => {});
+  return operation;
+}
 const ready = (async () => {
   await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
   const { fillJob } = await chrome.storage.session.get('fillJob');
@@ -17,11 +28,10 @@ async function startJob(message) {
   if (activeJob) throw new Error('已有填写任务正在进行，请等待完成');
   const tab = await chrome.tabs.get(message.tabId);
   if (!tab || !/^https?:/.test(tab.url || '')) throw new Error('请先打开企业投递页面');
-  if (!['hybrid', 'model'].includes(message.mode)) throw new Error('未知填写模式');
   const { profile, deepseek } = await chrome.storage.local.get(['profile', 'deepseek']);
-  if (!profile || !Object.values(profile).some(v => Array.isArray(v) ? v.length : v !== '' && v != null)) throw new Error('请先完善并保存简历画像');
+  if (!profile || !DeepSeekClient.hasData(profile)) throw new Error('请先保存 JSON 资料或补充文本');
   if (activeJob) throw new Error('已有填写任务正在进行，请等待完成');
-  const job = { id: crypto.randomUUID(), mode: message.mode, tabId: tab.id, status: 'running', phase: '正在准备填写…', startedAt: Date.now(), result: null };
+  const job = { id: crypto.randomUUID(), tabId: tab.id, status: 'running', phase: '正在准备填写…', startedAt: Date.now(), result: null };
   activeJob = job;
   try { await persistJob(job); } catch (error) { activeJob = null; throw error; }
   let documentId;
@@ -30,7 +40,7 @@ async function startJob(message) {
   void (async () => {
     try {
       const result = await FillController.runFillJob({
-        mode: message.mode, profile, settings: deepseek, fillNoneWhenEmpty: !!message.fillNoneWhenEmpty, allowOverwrite: message.allowOverwrite === true,
+        profile, settings: deepseek, fillNoneWhenEmpty: !!message.fillNoneWhenEmpty, allowOverwrite: message.allowOverwrite === true,
         execute: async (data, options) => {
           const responses = await chrome.scripting.executeScript({
             target: documentId ? { tabId: tab.id, documentIds: [documentId] } : { tabId: tab.id, frameIds: [0] },
@@ -96,13 +106,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === 'FLOATING_OPEN_HOME') return openHome(sender.tab.id);
       if (message.type === 'FLOATING_START_FILL') {
         const { fillNoneWhenEmpty } = await chrome.storage.local.get('fillNoneWhenEmpty');
-        return startJob({ mode: message.mode, tabId: sender.tab.id, fillNoneWhenEmpty: fillNoneWhenEmpty !== false, allowOverwrite: false });
+        return startJob({ tabId: sender.tab.id, fillNoneWhenEmpty: fillNoneWhenEmpty !== false, allowOverwrite: false });
       }
       const { profile, deepseek, floatingEnabled } = await chrome.storage.local.get(['profile', 'deepseek', 'floatingEnabled']);
       const { fillJob } = await chrome.storage.session.get('fillJob');
-      const fieldCount = Object.entries(profile || {}).reduce((n, [key, value]) => n + (Array.isArray(value) ? key === 'extraInfo' ? value.length : value.length ? 1 : 0 : value !== '' && value != null ? 1 : 0), 0);
+      const sources = DeepSeekClient.buildSources(profile || {});
+      const fieldCount = Object.entries(sources.profile).reduce((n, [key, value]) => n + (Array.isArray(value) ? key === 'extraInfo' ? value.length : value.length ? 1 : 0 : value !== '' && value != null ? 1 : 0), 0) + (sources.supplementText.trim() ? 1 : 0);
       // 悬浮入口不拿到画像值或密钥，仅拿准备状态和本页任务统计。
-      return { enabled: floatingEnabled !== false, profileReady: fieldCount > 0, fieldCount, configured: !!deepseek?.apiKey, busy: !!activeJob, job: fillJob?.tabId === sender.tab.id ? fillJob : null };
+      return { enabled: floatingEnabled !== false, profileReady: DeepSeekClient.hasData(profile || {}), fieldCount, configured: !!deepseek?.apiKey, busy: !!activeJob, job: fillJob?.tabId === sender.tab.id ? fillJob : null };
     }
     if (message.type === 'OPEN_HOME') return openHome(message.tabId);
     if (message.type === 'GET_TARGET_TAB') {
@@ -111,26 +122,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!/^https?:/.test(tab.url || '')) throw new Error('来源网申页面已关闭或导航，请重新打开');
       return { tab };
     }
-    if (message.type === 'SAVE_QUICK_PROFILE') {
-      const { profile } = await chrome.storage.local.get('profile');
-      const updated = { ...(profile || {}) };
-      if (message.extraInfo !== undefined) {
-        if (!Array.isArray(message.extraInfo) || message.extraInfo.length > 30) throw new Error('最多添加 30 条自定义信息');
-        const labels = new Set();
-        updated.extraInfo = message.extraInfo.flatMap(item => {
-          if (typeof item?.label !== 'string' || typeof item?.value !== 'string') throw new Error('自定义信息格式不正确');
-          const label = item.label.trim(), value = item.value.trim();
-          if (!label && !value) return [];
-          if (!label || !value) throw new Error('请补全自定义信息的名称和内容');
-          if (label.length > 120 || value.length > 10000) throw new Error('自定义信息名称或内容过长');
-          const normalized = label.toLowerCase();
-          if (labels.has(normalized)) throw new Error('自定义信息名称不能重复');
-          labels.add(normalized);
-          return [{ label, value }];
-        });
-      }
-      await chrome.storage.local.set({ profile: updated, syncedAt: Date.now() });
-      return { saved: true };
+    if (message.type === 'SAVE_SUPPLEMENT_TEXT') {
+      if (typeof message.text !== 'string' || message.text.length > DeepSeekClient.MAX_SUPPLEMENT_LENGTH) throw new Error('补充文本最多 30000 字');
+      return saveProfileUpdate(profile => ({ ...profile, supplementText: message.text.trim() }));
+    }
+    if (message.type === 'SAVE_JSON_PROFILE') {
+      if (!message.profile || typeof message.profile !== 'object' || Array.isArray(message.profile)) throw new Error('画像必须是 JSON 对象');
+      if (Object.hasOwn(message.profile, 'supplementText') && (typeof message.profile.supplementText !== 'string' || message.profile.supplementText.length > DeepSeekClient.MAX_SUPPLEMENT_LENGTH)) throw new Error('补充文本最多 30000 字');
+      return saveProfileUpdate(current => {
+        const updated = { ...message.profile };
+        if (message.replaceProfile !== true) {
+          if (Object.hasOwn(current, 'supplementText')) updated.supplementText = current.supplementText;
+          else delete updated.supplementText;
+          if (Array.isArray(current.extraInfo)) updated.extraInfo = current.extraInfo;
+        }
+        return updated;
+      });
     }
     if (message.type === 'GET_FLOATING_SETTINGS') {
       const { floatingEnabled } = await chrome.storage.local.get('floatingEnabled');
