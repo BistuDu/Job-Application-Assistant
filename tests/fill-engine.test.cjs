@@ -169,3 +169,16 @@ test('实际写入发出事件，清理后不能重复使用旧快照', async ()
     assert.equal((await fill(p, { action: 'apply', snapshotToken: scan.snapshotToken, assignments: [{ fieldId: scan.modelFields[0].fieldId, sourcePath: 'name' }] })).stale, 1);
   });
 });
+
+test('相同编码的下拉选项按模型 optionId 定位真实选项，包括无与占位项共用空编码', async () => {
+  await fixture('<label>等级<select id="level"><option value="">请选择</option><option value="same">等级甲</option><option value="same">等级乙</option></select></label><label>证书<select id="cert"><option value="">请选择</option><option value="">无</option></select></label>', async (page, fill) => {
+    const p = { level: '等级乙', certs: [] }; const scan = await fill(p);
+    const r = await fill(p, { action:'apply', snapshotToken:scan.snapshotToken, fillNoneWhenEmpty:true, assignments:[
+      {fieldId:scan.modelFields[0].fieldId,sourcePath:'level',optionId:'option-1'},
+      {fieldId:scan.modelFields[1].fieldId,sourcePath:'certs',fillNone:true,optionId:'option-0'},
+    ]});
+    assert.equal(r.filled,2);
+    assert.equal(await page.locator('#level').evaluate(el => el.selectedOptions[0].text),'等级乙');
+    assert.equal(await page.locator('#cert').evaluate(el => el.selectedOptions[0].text),'无');
+  });
+});

@@ -403,8 +403,8 @@ function FILL_FUNCTION(profile, opts) {
         if (assignment.optionId != null) {
           const index = record.description.options.findIndex(o => o.optionId === assignment.optionId);
           const option = record.choices[index];
-          if (option && !option.disabled) {
-            if (el.tagName === 'SELECT') { el.value = option.value; emitChanges(el); success = el.value === option.value; }
+          if (option && option.isConnected && !option.disabled) {
+            if (el.tagName === 'SELECT' && el.contains(option)) { const selectedIndex = option.index; el.selectedIndex = selectedIndex; emitChanges(el); success = el.selectedIndex === selectedIndex; }
             else if (el.type === 'radio') { if (!option.checked) option.click(); success = option.checked; }
           }
         } else if (el.tagName !== 'SELECT' && el.type !== 'radio') success = setVal(el, value);
