@@ -139,15 +139,22 @@ header {
 .result.err { background: var(--err-weak); border-color: #fecaca; color: #991b1b; }
 
 /* ---- 使用说明 ---- */
-.help { margin-top: 6px; }
-.help summary {
-  cursor: pointer; font-weight: 600; color: var(--sub);
-  padding: 8px 0; font-size: 12px;
+.help {
+  margin-top: 10px; padding: 8px 12px;
+  background: #fff8e8; border: 1px solid #ead39f;
+  border-left: 4px solid #c99839; border-radius: var(--radius);
 }
-.help summary:hover { color: var(--primary); }
-.help ol { padding-left: 18px; color: var(--sub); font-size: 12px; margin: 6px 0; }
-.help ol li { margin-bottom: 4px; }
-.help ol li b { color: var(--text); }
+.help summary {
+  cursor: pointer; font-weight: 700; color: #75501c;
+  padding: 7px 0; font-size: 13px;
+}
+.help summary:hover { color: #50340e; }
+.help summary:focus-visible { outline: 2px solid #c99839; outline-offset: 3px; border-radius: 4px; }
+.help[open] summary { border-bottom: 1px solid #ead39f; margin-bottom: 10px; }
+.help ol { padding-left: 20px; color: #5b5141; font-size: 12px; margin: 8px 0; }
+.help ol li { margin-bottom: 7px; }
+.help ol li::marker { color: #90621e; font-weight: 700; }
+.help ol li b { color: #6434d4; }
 .help .privacy {
   font-size: 11px; color: var(--muted); margin-top: 8px;
   background: var(--ok-weak); border: 1px solid #bbf7d0;
@@ -156,10 +163,15 @@ header {
 
 /* 使用说明分段 */
 .usage-section { margin-bottom: 8px; }
-.usage-title { font-size: 12px; font-weight: 700; color: var(--primary); margin-bottom: 2px; }
+.usage-title { font-size: 12px; font-weight: 700; color: #75501c; margin-bottom: 2px; }
+.usage-priority {
+  background: #fff; border: 1px solid #ead39f; border-radius: 8px;
+  padding: 8px 10px; margin: 7px 0 10px; font-size: 12px; color: #5b5141;
+}
+.usage-priority b { color: #6434d4; }
 .usage-note {
-  font-size: 11px; color: var(--sub); margin: 6px 0;
-  background: var(--primary-weak); border-radius: 6px; padding: 4px 8px;
+  font-size: 11px; color: #75501c; margin: 6px 0;
+  background: #fff0c9; border-radius: 6px; padding: 6px 8px;
 }
 
 /* ========== v2.4：空缺填无开关 ========== */
