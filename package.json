@@ -1,0 +1,11 @@
+{
+  "name": "job-application-helper-extension",
+  "version": "2.11.1",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

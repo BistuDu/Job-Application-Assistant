@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "职聘通·网申助手",
+  "version": "2.11.1",
+  "minimum_chrome_version": "110",
+  "description": "网申自动填写，支持规则+DeepSeek与纯DeepSeek两种模式。画像本地保存，使用模型时将字段描述和画像发送至DeepSeek。",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "content_scripts": [{
+    "matches": ["http://*/*", "https://*/*"],
+    "exclude_matches": ["https://api.deepseek.com/*"],
+    "js": ["floating.js"],
+    "run_at": "document_idle",
+    "all_frames": false
+  }],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "职聘通·网申助手"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["profile.example.json"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

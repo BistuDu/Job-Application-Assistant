@@ -1,0 +1,167 @@
+{
+  "_comment": "职聘通·网申助手 画像模板 v2.6 — 参照各大招聘网站网申完整字段要求，可独立使用",
+  "name": "示例用户",
+  "gender": "男",
+  "nationality": "中国",
+  "idType": "身份证",
+  "birth": "2005.01",
+  "birthplace": "浙江省杭州市",
+  "age": "21",
+  "nation": "汉族",
+  "politics": "共青团员",
+  "idcard": "",
+  "marital": "未婚",
+  "onlyChild": "否",
+  "height": "178cm",
+  "bloodType": "A",
+  "health": "良好",
+  "hometown": "浙江省杭州市",
+  "hukouLocation": "浙江省杭州市西湖区",
+  "hukouType": "非农业",
+  "school": "示例大学",
+  "department": "计算机学院",
+  "major": "计算机科学与技术",
+  "majorCategory": "工学",
+  "secondMajor": "",
+  "class": "计算机2301班",
+  "studentId": "",
+  "degree": "本科",
+  "isFirstDegree": "是",
+  "schoolLevel": "双一流",
+  "schoolLocation": "浙江省杭州市",
+  "eduDuration": "四年",
+  "eduMode": "全日制",
+  "admissionBatch": "一本",
+  "schoolStart": "2023.09",
+  "gradYear": "2027",
+  "gradTime": "2027.06",
+  "rank": "专业排名前30%",
+  "tutor": "",
+  "thesis": "",
+  "eduType": "统招",
+  "phone": "",
+  "homePhone": "",
+  "email": "you@example.com",
+  "wechat": "your_wechat_id",
+  "qq": "123456789",
+  "blog": "https://example.com",
+  "linkedin": "",
+  "github": "https://github.com/example",
+  "province": "浙江",
+  "city": "杭州市",
+  "address": "浙江省杭州市西湖区示例路1号",
+  "postcode": "310000",
+  "emergencyContact": "示例家长",
+  "emergencyPhone": "",
+  "emergencyRelation": "父子",
+  "target": "软件工程师",
+  "preferCity": "杭州、北京、上海",
+  "preferIndustry": "互联网/IT",
+  "preferFunction": "研发",
+  "jobType": "实习",
+  "expSalary": "8-12K",
+  "expAnnual": "10-15万",
+  "acceptAdjust": "接受",
+  "acceptTravel": "接受",
+  "acceptRelocate": "接受",
+  "availableTime": "随时到岗",
+  "internDuration": "3个月以上",
+  "internDays": "5天/周",
+  "channel": "校内就业网",
+  "english": "CET-4",
+  "otherLang": "无",
+  "computerLevel": "国家二级",
+  "mandarin": "二级甲等",
+  "experiences": [
+    {
+      "org": "示例公司",
+      "role": "开发实习生",
+      "time": "2025.06-2025.09",
+      "salary": "200元/天",
+      "reason": "实习结束返校",
+      "referee": "张经理",
+      "refereePhone": "",
+      "desc": "负责后端接口开发，优化API响应速度"
+    }
+  ],
+  "research": [
+    {
+      "name": "智能问答系统研究",
+      "role": "核心成员",
+      "time": "2024.03-2024.09",
+      "desc": "基于大语言模型构建垂直领域问答系统，发表论文1篇"
+    }
+  ],
+  "competitions": [
+    {
+      "name": "全国大学生数学建模竞赛",
+      "level": "国家级",
+      "award": "一等奖",
+      "time": "2024.09"
+    }
+  ],
+  "campus": [
+    {
+      "org": "校学生会",
+      "role": "干事",
+      "time": "2023.10-2024.06",
+      "desc": "参与策划校级活动"
+    }
+  ],
+  "awards": [
+    {
+      "name": "国家奖学金",
+      "level": "国家级",
+      "time": "2024"
+    }
+  ],
+  "projects": [
+    {
+      "name": "校园电商小程序",
+      "role": "产品负责人",
+      "time": "2024.03-2024.06",
+      "desc": "从0到1搭建校园二手交易平台，注册用户2000+"
+    }
+  ],
+  "papers": [],
+  "volunteer": [
+    {
+      "org": "社区敬老院",
+      "role": "志愿者",
+      "time": "2024.05",
+      "desc": "每月定期探访老人，组织文艺活动"
+    }
+  ],
+  "certs": [
+    "CET-4",
+    "计算机二级"
+  ],
+  "skills": [
+    "Python",
+    "数据分析",
+    "客户沟通"
+  ],
+  "strengths": "客户沟通能力强，擅长数据分析，执行力高",
+  "selfIntro": "这是我的一份示例自我介绍，请替换为你的真实内容。",
+  "family": [
+    {
+      "relation": "父亲",
+      "name": "示例父",
+      "age": "50",
+      "politics": "中共党员",
+      "company": "示例公司",
+      "position": "经理",
+      "phone": ""
+    },
+    {
+      "relation": "母亲",
+      "name": "示例母",
+      "age": "48",
+      "politics": "群众",
+      "company": "示例单位",
+      "position": "职员",
+      "phone": ""
+    }
+  ],
+  "hobbies": "篮球、阅读、摄影"
+}
